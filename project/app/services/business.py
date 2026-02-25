@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -254,11 +255,18 @@ class PaymentService:
                         notify_err,
                     )
 
-    async def apply_promo_code(self, customer: Customer, promo_code: str, username: Optional[str]) -> str:
+    async def apply_promo_code(
+        self,
+        customer: Customer,
+        promo_code: str,
+        username: Optional[str],
+        source: str = "manual",
+    ) -> str:
         code = promo_code.strip()
         if not code:
             return "empty"
-        promo = await self.promo_repo.find_by_code(code.upper())
+        normalized_code = code.upper()
+        promo = await self.promo_repo.find_by_code(normalized_code)
         if not promo:
             return "not_found"
 
@@ -296,8 +304,48 @@ class PaymentService:
             )
         except Exception as err:  # noqa: BLE001
             logger.warning("failed to notify promo applied: %s", err)
-        logger.info("promo applied code=%s customer=%s", code, customer.telegram_id)
+        refreshed_promo = await self.promo_repo.find_by_code(normalized_code)
+        if refreshed_promo:
+            promo = refreshed_promo
+        await self._notify_owner_about_promo_activation(customer, promo, username, source)
+        logger.info("promo applied code=%s customer=%s source=%s", normalized_code, customer.telegram_id, source)
         return "ok"
+
+    async def _notify_owner_about_promo_activation(
+        self,
+        customer: Customer,
+        promo: PromoCode,
+        username: Optional[str],
+        source: str,
+    ) -> None:
+        chat_ids = list(config.log_chat_ids)
+        if not chat_ids:
+            return
+
+        username_value = username or customer.username or ""
+        username_text = f"@{username_value}" if username_value else "-"
+        source_text = "deeplink" if source == "deeplink" else "manual"
+        text = (
+            "🎟 <b>Promo activated</b>\n"
+            f"ID: <code>{customer.telegram_id}</code>\n"
+            f"Username: {html.escape(username_text)}\n"
+            f"Code: <code>{html.escape(promo.code)}</code>\n"
+            f"Bonus: <b>+{promo.days} days, +{promo.traffic_gb} GB</b>\n"
+            f"Used: <b>{promo.used}/{promo.max_uses}</b>\n"
+            f"Source: <b>{html.escape(source_text)}</b>\n"
+            f"Time (UTC): <b>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</b>"
+        )
+        for chat_id in chat_ids:
+            try:
+                await self.bot.send_message(chat_id, text, parse_mode="HTML")
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "failed to notify chat=%s about promo activation code=%s customer=%s: %s",
+                    chat_id,
+                    promo.code,
+                    customer.telegram_id,
+                    err,
+                )
 
     async def _maybe_grant_referral_bonus(self, customer: Customer) -> None:
         referral = await self.referral_repo.find_by_referee(customer.telegram_id)

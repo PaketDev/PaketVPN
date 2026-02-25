@@ -224,6 +224,7 @@ def setup_router(
     panel_state: Dict[int, Dict[str, Any]] = {}
     gift_state: Dict[int, Dict[str, Any]] = {}
     pending_captcha: Dict[int, Dict[str, Any]] = {}
+    pending_start_promo: Dict[int, str] = {}
 
     def _button_emoji_id(lang: str, key: str) -> Optional[str]:
         value = tm.get_text(lang, f"{key}_emoji_id")
@@ -719,13 +720,19 @@ def setup_router(
             parse_mode="HTML",
         )
 
-    def _parse_referrer_id(start_text: Optional[str], own_telegram_id: int) -> Optional[int]:
+    def _extract_start_arg(start_text: Optional[str]) -> Optional[str]:
         if not start_text:
             return None
         parts = start_text.split(maxsplit=1)
         if len(parts) < 2:
             return None
-        start_arg = parts[1].strip()
+        start_arg = (parts[1] or "").strip()
+        return start_arg or None
+
+    def _parse_referrer_id(start_text: Optional[str], own_telegram_id: int) -> Optional[int]:
+        start_arg = _extract_start_arg(start_text)
+        if not start_arg:
+            return None
         if not start_arg.startswith("ref_"):
             return None
         code = start_arg.replace("ref_", "", 1)
@@ -737,6 +744,58 @@ def setup_router(
         if referrer_id == own_telegram_id:
             return None
         return referrer_id
+
+    def _parse_start_promo_code(start_text: Optional[str]) -> Optional[str]:
+        start_arg = _extract_start_arg(start_text)
+        if not start_arg:
+            return None
+        lowered = start_arg.lower()
+        prefixes = ("promo_", "promo-", "promo:", "promo=")
+        code = ""
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                code = start_arg[len(prefix) :]
+                break
+        if not code:
+            return None
+        normalized = code.strip().upper()
+        if not normalized or len(normalized) > 64:
+            return None
+        allowed = set(string.ascii_uppercase + string.digits + "-_")
+        if any(ch not in allowed for ch in normalized):
+            return None
+        return normalized
+
+    async def _apply_pending_start_promo(customer: Customer, lang: str, username: Optional[str]) -> None:
+        promo_code = pending_start_promo.pop(customer.telegram_id, None)
+        if not promo_code:
+            return
+
+        status = await payment_service.apply_promo_code(
+            customer,
+            promo_code,
+            username,
+            source="deeplink",
+        )
+        if status == "ok":
+            return
+
+        if status == "already_used":
+            response = tm.get_text(lang, "promo_already_used")
+        elif status == "exhausted":
+            response = tm.get_text(lang, "promo_exhausted")
+        else:
+            response = tm.get_text(lang, "promo_invalid")
+        try:
+            await bot.send_message(customer.telegram_id, response, parse_mode="HTML")
+        except Exception as err:  # noqa: BLE001
+            logger.warning(
+                "failed to send promo deeplink status customer=%s promo=%s status=%s: %s",
+                customer.telegram_id,
+                promo_code,
+                status,
+                err,
+            )
 
     def _build_captcha_challenge(lang: str) -> Tuple[str, InlineKeyboardMarkup, str, str]:
         pool = [
@@ -867,6 +926,11 @@ def setup_router(
     @router.message(CommandStart())
     async def start_command(message: Message) -> None:
         lang = message.from_user.language_code or config.default_language
+        parsed_promo_code = _parse_start_promo_code(message.text)
+        if parsed_promo_code:
+            pending_start_promo[message.chat.id] = parsed_promo_code
+        else:
+            pending_start_promo.pop(message.chat.id, None)
         existing_customer = await customer_repo.find_by_telegram_id(message.chat.id)
         is_new_customer = existing_customer is None
         customer = existing_customer
@@ -903,6 +967,7 @@ def setup_router(
             )
             return
 
+        await _apply_pending_start_promo(customer, lang, message.from_user.username)
         await _show_start_home(message, customer, lang)
 
     @router.callback_query(F.data.startswith(f"{CallbackCaptcha}:"))
@@ -973,6 +1038,7 @@ def setup_router(
             await callback.answer(tm.get_text(lang, "captcha_ok"))
             return
 
+        await _apply_pending_start_promo(customer, lang, callback.from_user.username)
         customer = await payment_service.refresh_customer_subscription(customer)
         markup = start_keyboard(customer, lang, tm)
         await callback.message.edit_text(
@@ -1032,6 +1098,7 @@ def setup_router(
                 parse_mode="HTML",
             )
         else:
+            await _apply_pending_start_promo(customer, lang, callback.from_user.username)
             customer = await payment_service.refresh_customer_subscription(customer)
             markup = start_keyboard(customer, lang, tm)
             await callback.message.edit_text(
