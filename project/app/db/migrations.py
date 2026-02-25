@@ -41,12 +41,6 @@ CREATE TABLE IF NOT EXISTS purchase (
     platega_redirect_url   TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_purchase_invoice_type_status
-    ON purchase(invoice_type, status);
-
-CREATE INDEX IF NOT EXISTS idx_purchase_platega_transaction
-    ON purchase(platega_transaction_id);
-
 CREATE TABLE IF NOT EXISTS sales_log (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     purchase_id      INTEGER UNIQUE NOT NULL REFERENCES purchase(id) ON DELETE CASCADE,
@@ -139,6 +133,12 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
             rows = await cursor.fetchall()
         return any(str(row[1]) == column for row in rows)
 
+    async def _has_columns(table: str, columns: tuple[str, ...]) -> bool:
+        for column in columns:
+            if not await _has_column(table, column):
+                return False
+        return True
+
     await db.executescript(CREATE_SCHEMA)
     try:
         await db.execute("ALTER TABLE purchase ADD COLUMN plan TEXT")
@@ -153,9 +153,17 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
     except Exception:
         pass
     try:
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_purchase_platega_transaction ON purchase(platega_transaction_id)"
-        )
+        if await _has_columns("purchase", ("invoice_type", "status")):
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_purchase_invoice_type_status ON purchase(invoice_type, status)"
+            )
+    except Exception:
+        pass
+    try:
+        if await _has_column("purchase", "platega_transaction_id"):
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_purchase_platega_transaction ON purchase(platega_transaction_id)"
+            )
     except Exception:
         pass
     try:
