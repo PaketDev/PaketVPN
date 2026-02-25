@@ -220,6 +220,24 @@ jobs:
             exit 1
           fi
 
+          # Container runs as user "app" (uid/gid 1000 in Dockerfile).
+          # Ensure SQLite files and DB directory are writable to avoid
+          # "attempt to write a readonly database" on startup.
+          app_uid=1000
+          app_gid=1000
+          chown "$app_uid:$app_gid" "$db_host_dir" || true
+          chmod 775 "$db_host_dir" || true
+          chown "$app_uid:$app_gid" "$db_file" || true
+          chmod 664 "$db_file" || true
+          if [[ -f "$db_file-wal" ]]; then
+            chown "$app_uid:$app_gid" "$db_file-wal" || true
+            chmod 664 "$db_file-wal" || true
+          fi
+          if [[ -f "$db_file-shm" ]]; then
+            chown "$app_uid:$app_gid" "$db_file-shm" || true
+            chmod 664 "$db_file-shm" || true
+          fi
+
           mkdir -p "$backup_dir"
           if command -v sqlite3 >/dev/null 2>&1; then
             sqlite3 "$db_file" ".backup '$backup_dir/bot-$backup_timestamp.db'"
