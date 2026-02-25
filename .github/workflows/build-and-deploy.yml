@@ -274,15 +274,7 @@ jobs:
             if [[ "$health_status" == "starting" ]]; then
               # Fallback check to avoid false negatives when Docker health status
               # has not transitioned yet but endpoint already works.
-              if python3 - <<'PY'
-import sys, urllib.request
-try:
-    urllib.request.urlopen("http://127.0.0.1:8080/healthcheck", timeout=5).read()
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-PY
-              then
+              if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthcheck', timeout=5).read()"; then
                 health_status="healthy"
               fi
             fi
