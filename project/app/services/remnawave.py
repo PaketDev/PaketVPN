@@ -132,11 +132,16 @@ class RemnawaveClient:
         seen_ids: set[str] = set()
         max_pages = 2000
         pages_processed = 0
+        page = 1
         while True:
             pages_processed += 1
             if pages_processed > max_pages:
                 break
-            data = await self._request("GET", path, params={"limit": limit, "offset": offset})
+            data = await self._request(
+                "GET",
+                path,
+                params={"limit": limit, "offset": offset, "page": page},
+            )
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
@@ -167,6 +172,7 @@ class RemnawaveClient:
 
             step = page_size_hint or len(items) or limit
             offset += step
+            page += 1
         return users
 
     async def get_users(self) -> List[RemnawaveUser]:
