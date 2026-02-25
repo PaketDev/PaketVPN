@@ -233,7 +233,7 @@ jobs:
           fi
 
           "${COMPOSE[@]}" ps paketvpn-bot
-REMOTE
+          REMOTE
 
       - name: Docker logout on server
         shell: bash
