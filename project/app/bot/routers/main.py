@@ -1833,8 +1833,16 @@ def setup_router(
             await message.answer("Access denied")
             return
         await message.answer("Sync started...")
-        await sync_service.sync()
-        await message.answer("Sync completed")
+        stats = await sync_service.sync()
+        await message.answer(
+            "Sync completed\n"
+            f"fetched: {stats['fetched']}\n"
+            f"with telegram_id: {stats['with_telegram_id']}\n"
+            f"created: {stats['created']}\n"
+            f"updated: {stats['updated']}\n"
+            f"skipped (no telegram_id): {stats['skipped_without_telegram_id']}\n"
+            f"skipped (duplicates): {stats['skipped_duplicates']}"
+        )
 
     @router.callback_query(F.data == CallbackBuy)
     async def buy_callback(callback: CallbackQuery) -> None:

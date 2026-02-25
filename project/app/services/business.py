@@ -833,16 +833,29 @@ class SyncService:
         self.remnawave_client = remnawave_client
         self.customer_repo = customer_repo
 
-    async def sync(self) -> None:
+    async def sync(self) -> Dict[str, int]:
         users = await self.remnawave_client.get_users()
         if not users:
             logger.warning("no users fetched from remnawave")
-            return
+            return {
+                "fetched": 0,
+                "with_telegram_id": 0,
+                "skipped_without_telegram_id": 0,
+                "skipped_duplicates": 0,
+                "created": 0,
+                "updated": 0,
+            }
         telegram_ids: List[int] = []
         mapped_users: List[Customer] = []
         seen: set[int] = set()
+        skipped_without_telegram_id = 0
+        skipped_duplicates = 0
         for user in users:
-            if user.telegram_id is None or user.telegram_id in seen:
+            if user.telegram_id is None:
+                skipped_without_telegram_id += 1
+                continue
+            if user.telegram_id in seen:
+                skipped_duplicates += 1
                 continue
             seen.add(user.telegram_id)
             telegram_ids.append(user.telegram_id)
@@ -872,13 +885,25 @@ class SyncService:
                 to_create.append(cust)
 
         await self.customer_repo.delete_by_not_in_telegram_ids(telegram_ids)
+        created_count = 0
+        updated_count = 0
         if to_create:
             await self.customer_repo.create_batch(to_create)
             logger.info("sync created customers count=%s", len(to_create))
+            created_count = len(to_create)
         if to_update:
             await self.customer_repo.update_batch(to_update)
             logger.info("sync updated customers count=%s", len(to_update))
+            updated_count = len(to_update)
         logger.info("synchronization completed")
+        return {
+            "fetched": len(users),
+            "with_telegram_id": len(telegram_ids),
+            "skipped_without_telegram_id": skipped_without_telegram_id,
+            "skipped_duplicates": skipped_duplicates,
+            "created": created_count,
+            "updated": updated_count,
+        }
 
     async def get_traffic_usage(self, telegram_id: int) -> Tuple[int, int, bool]:
         user = await self.remnawave_client.fetch_user_by_telegram(telegram_id)
