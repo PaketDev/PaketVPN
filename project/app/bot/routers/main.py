@@ -1830,7 +1830,9 @@ def setup_router(
     @router.message(Command("sync"))
     async def sync_command(message: Message) -> None:
         if not _is_admin(message.from_user.id):
+            await message.answer("Access denied")
             return
+        await message.answer("Sync started...")
         await sync_service.sync()
         await message.answer("Sync completed")
 
