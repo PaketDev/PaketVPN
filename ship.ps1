@@ -1,5 +1,5 @@
 param(
-  [string]$Message = "",
+  [string]$Message = "Deploy Project",
   [string]$Branch = "main"
 )
 

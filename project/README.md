@@ -35,9 +35,10 @@ Flow:
 2. GitHub Actions builds Docker image from `project/Dockerfile`.
 3. Image is pushed to GHCR (`ghcr.io/<owner>/<repo>/paketvpn-bot:latest`).
 4. Workflow connects to your server by SSH.
-5. If git repo exists on server, workflow pulls deploy branch there (`ff-only`).
-6. Server creates DB backup (`sqlite3 .backup` if available, otherwise file copy).
-7. Server pulls latest image and restarts `paketvpn-bot` container with healthcheck validation.
+5. Workflow uploads latest `project/docker-compose.yml` to `DEPLOY_PATH`.
+6. If git repo exists on server, workflow pulls deploy branch there (`ff-only`).
+7. Server creates DB backup (`sqlite3 .backup` if available, otherwise file copy).
+8. Server pulls latest image and restarts `paketvpn-bot` container with healthcheck validation.
 
 Required GitHub Secrets
 -----------------------

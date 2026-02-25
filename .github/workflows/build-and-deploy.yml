@@ -120,6 +120,19 @@ jobs:
           port="${DEPLOY_PORT:-22}"
           echo "$GHCR_TOKEN" | ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
 
+      - name: Sync compose file to server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          scp -i ~/.ssh/id_ed25519 -P "$port" project/docker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
+
       - name: Deploy image on server
         shell: bash
         env:
