@@ -867,6 +867,7 @@ class SyncService:
                     created_at=datetime.utcnow(),
                     subscription_link=user.subscription_url,
                     language=config.default_language,
+                    username=None,
                 )
             )
 
