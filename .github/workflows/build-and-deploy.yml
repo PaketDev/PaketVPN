@@ -1,0 +1,247 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-and-deploy-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_repo: ${{ steps.prepare.outputs.image_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare image name
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_repo=${repo}/paketvpn-bot" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prepare.outputs.image_repo }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./project
+          file: ./project/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY; do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "Missing required secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Configure SSH key
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Add server host key
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh-keyscan -p "$port" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Docker login on server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          echo "$GHCR_TOKEN" | ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+      - name: Deploy image on server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_DB_DIR: ${{ secrets.DEPLOY_DB_DIR }}
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          DEPLOY_BRANCH: ${{ secrets.DEPLOY_BRANCH }}
+          IMAGE: ghcr.io/${{ needs.build.outputs.image_repo }}:latest
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$DEPLOY_PATH' '$IMAGE' '${DEPLOY_DB_DIR:-..}' '${DEPLOY_ENV_FILE:-../.env}' '${DEPLOY_BRANCH:-main}'" <<'REMOTE'
+          set -euo pipefail
+          deploy_path="$1"
+          image="$2"
+          db_host_dir="$3"
+          env_file="$4"
+          deploy_branch="$5"
+          db_file="$db_host_dir/bot.db"
+          backup_dir="$db_host_dir/db-backups"
+          backup_timestamp="$(date -u +%Y%m%d-%H%M%S)"
+
+          cd "$deploy_path"
+
+          repo_dir=""
+          if [[ -d "$deploy_path/.git" ]]; then
+            repo_dir="$deploy_path"
+          elif [[ -d "$deploy_path/../.git" ]]; then
+            repo_dir="$(cd "$deploy_path/.." && pwd)"
+          fi
+
+          if [[ -n "$repo_dir" ]]; then
+            if ! command -v git >/dev/null 2>&1; then
+              echo "git is required on server to sync repository updates"
+              exit 1
+            fi
+            git -C "$repo_dir" fetch origin "$deploy_branch"
+            current_branch="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD)"
+            if [[ "$current_branch" != "$deploy_branch" ]]; then
+              if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$deploy_branch"; then
+                git -C "$repo_dir" checkout "$deploy_branch"
+              else
+                git -C "$repo_dir" checkout -b "$deploy_branch" --track "origin/$deploy_branch"
+              fi
+            fi
+            git -C "$repo_dir" merge --ff-only "origin/$deploy_branch"
+          else
+            echo "No git repo found near DEPLOY_PATH, skipping source sync."
+          fi
+
+          if docker compose version >/dev/null 2>&1; then
+            COMPOSE=(docker compose)
+          elif command -v docker-compose >/dev/null 2>&1; then
+            COMPOSE=(docker-compose)
+          else
+            echo "docker compose is not installed on server"
+            exit 1
+          fi
+
+          if [[ ! -f "$db_file" ]]; then
+            echo "Database file not found: $db_file"
+            exit 1
+          fi
+
+          if [[ ! -f "$env_file" ]]; then
+            echo "Env file not found: $env_file"
+            exit 1
+          fi
+
+          mkdir -p "$backup_dir"
+          if command -v sqlite3 >/dev/null 2>&1; then
+            sqlite3 "$db_file" ".backup '$backup_dir/bot-$backup_timestamp.db'"
+          else
+            cp -a "$db_file" "$backup_dir/bot-$backup_timestamp.db"
+            if [[ -f "$db_file-wal" ]]; then
+              cp -a "$db_file-wal" "$backup_dir/bot-$backup_timestamp.db-wal"
+            fi
+            if [[ -f "$db_file-shm" ]]; then
+              cp -a "$db_file-shm" "$backup_dir/bot-$backup_timestamp.db-shm"
+            fi
+          fi
+
+          # Keep only the latest 30 primary db snapshots.
+          ls -1t "$backup_dir"/bot-*.db 2>/dev/null | tail -n +31 | xargs -r rm -f
+
+          export BOT_IMAGE="$image"
+          export DB_HOST_DIR="$db_host_dir"
+          export BOT_ENV_FILE="$env_file"
+          "${COMPOSE[@]}" pull paketvpn-bot
+          "${COMPOSE[@]}" up -d --no-build --remove-orphans paketvpn-bot
+
+          container_id="$("${COMPOSE[@]}" ps -q paketvpn-bot)"
+          if [[ -n "$container_id" ]]; then
+            for _ in {1..30}; do
+              health_status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+              if [[ "$health_status" == "healthy" || "$health_status" == "none" ]]; then
+                break
+              fi
+              sleep 2
+            done
+
+            health_status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [[ "$health_status" != "healthy" && "$health_status" != "none" ]]; then
+              echo "Container health check failed: $health_status"
+              "${COMPOSE[@]}" logs --tail=150 paketvpn-bot
+              exit 1
+            fi
+          fi
+
+          "${COMPOSE[@]}" ps paketvpn-bot
+REMOTE
+
+      - name: Docker logout on server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "docker logout ghcr.io >/dev/null 2>&1 || true"

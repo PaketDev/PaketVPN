@@ -1,0 +1,11 @@
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.env
+bot.db
+.git/
+.gitignore
+tests/
+project/tests/

@@ -1,0 +1,26 @@
+services:
+  paketvpn-bot:
+    image: ${BOT_IMAGE:-paketvpn-bot:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    env_file:
+      - ${BOT_ENV_FILE:-.env}
+    environment:
+      DB_PATH: /data/bot.db
+      HEALTH_CHECK_PORT: 8080
+    volumes:
+      - type: bind
+        source: ${DB_HOST_DIR:-..}
+        target: /data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    networks:
+      - remnawave-network
+
+networks:
+  remnawave-network:
+    external: true

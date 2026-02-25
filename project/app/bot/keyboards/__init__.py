@@ -1,0 +1,2 @@
+"""Keyboards for the bot."""
+
