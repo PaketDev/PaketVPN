@@ -39,7 +39,7 @@
   "feedback_button": "Отзыв",
   "server_status_button": "Статус серверов",
   "support_button": "Поддержка",
-  "channel_button": "КаналТЕСТ",
+  "channel_button": "Канал",
   "tos_button": "Условия пользования",
   "subscription_expiring": "⚠️ <b>Подписка скоро истечёт</b>\n<i>Дата окончания:</i> <b>%s</b>\n<i>Продлите, чтобы не потерять доступ.</i>",
   "renew_subscription_button": "Продлить подписку",

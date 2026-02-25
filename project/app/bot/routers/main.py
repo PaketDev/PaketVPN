@@ -1833,7 +1833,16 @@ def setup_router(
             await message.answer("Access denied")
             return
         await message.answer("Sync started...")
-        stats = await sync_service.sync()
+        try:
+            stats = await asyncio.wait_for(sync_service.sync(), timeout=180)
+        except asyncio.TimeoutError:
+            await message.answer("Sync timed out after 180 seconds")
+            return
+        except Exception as err:  # noqa: BLE001
+            logger.exception("sync command failed: %s", err)
+            await message.answer(f"Sync failed: {err}")
+            return
+
         await message.answer(
             "Sync completed\n"
             f"fetched: {stats['fetched']}\n"
