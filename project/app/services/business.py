@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -833,10 +833,20 @@ class SyncService:
         self.remnawave_client = remnawave_client
         self.customer_repo = customer_repo
 
-    async def sync(self) -> Dict[str, int]:
+    async def sync(
+        self,
+        progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+        prune_missing: bool = False,
+    ) -> Dict[str, int]:
+        async def _report(text: str) -> None:
+            if progress_cb:
+                await progress_cb(text)
+
+        await _report("Sync: fetching users from API...")
         users = await self.remnawave_client.get_users()
         if not users:
             logger.warning("no users fetched from remnawave")
+            await _report("Sync: API returned 0 users")
             return {
                 "fetched": 0,
                 "with_telegram_id": 0,
@@ -844,7 +854,9 @@ class SyncService:
                 "skipped_duplicates": 0,
                 "created": 0,
                 "updated": 0,
+                "deleted": 0,
             }
+        await _report(f"Sync: fetched {len(users)} users, preparing data...")
         telegram_ids: List[int] = []
         mapped_users: List[Customer] = []
         seen: set[int] = set()
@@ -885,9 +897,16 @@ class SyncService:
             else:
                 to_create.append(cust)
 
-        await self.customer_repo.delete_by_not_in_telegram_ids(telegram_ids)
+        deleted_count = 0
+        if prune_missing:
+            await self.customer_repo.delete_by_not_in_telegram_ids(telegram_ids)
+            deleted_count = -1
+            await _report("Sync: prune enabled, removed users missing in API")
         created_count = 0
         updated_count = 0
+        await _report(
+            f"Sync: applying changes (create={len(to_create)}, update={len(to_update)})..."
+        )
         if to_create:
             await self.customer_repo.create_batch(to_create)
             logger.info("sync created customers count=%s", len(to_create))
@@ -897,6 +916,7 @@ class SyncService:
             logger.info("sync updated customers count=%s", len(to_update))
             updated_count = len(to_update)
         logger.info("synchronization completed")
+        await _report("Sync: completed")
         return {
             "fetched": len(users),
             "with_telegram_id": len(telegram_ids),
@@ -904,6 +924,7 @@ class SyncService:
             "skipped_duplicates": skipped_duplicates,
             "created": created_count,
             "updated": updated_count,
+            "deleted": deleted_count,
         }
 
     async def get_traffic_usage(self, telegram_id: int) -> Tuple[int, int, bool]:

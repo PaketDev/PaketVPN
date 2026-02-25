@@ -446,16 +446,25 @@ class CustomerRepository:
             await self.db.commit()
 
     async def update_batch(self, customers: Iterable[Customer]) -> None:
+        payload = [
+            (
+                _to_iso(c.expire_at),
+                c.subscription_link,
+                c.language,
+                c.id,
+            )
+            for c in customers
+        ]
+        if not payload:
+            return
+        query = """
+            UPDATE customer
+            SET expire_at = ?, subscription_link = ?, language = ?
+            WHERE id = ?
+        """
         async with self._lock:
-            for c in customers:
-                await self.update_fields(
-                    c.id,
-                    {
-                        "expire_at": _to_iso(c.expire_at),
-                        "subscription_link": c.subscription_link,
-                        "language": c.language,
-                    },
-                )
+            await self.db.executemany(query, payload)
+            await self.db.commit()
 
     async def delete_by_not_in_telegram_ids(self, telegram_ids: Sequence[int]) -> None:
         if telegram_ids:

@@ -1832,23 +1832,34 @@ def setup_router(
         if not _is_admin(message.from_user.id):
             await message.answer("Access denied")
             return
-        await message.answer("Sync started...")
+        progress_message = await message.answer("Sync started...")
+
+        async def _progress(text: str) -> None:
+            try:
+                await progress_message.edit_text(text)
+            except Exception:
+                pass
+
         try:
-            stats = await asyncio.wait_for(sync_service.sync(), timeout=180)
+            stats = await asyncio.wait_for(
+                sync_service.sync(progress_cb=_progress, prune_missing=False),
+                timeout=300,
+            )
         except asyncio.TimeoutError:
-            await message.answer("Sync timed out after 180 seconds")
+            await progress_message.edit_text("Sync timed out after 300 seconds")
             return
         except Exception as err:  # noqa: BLE001
             logger.exception("sync command failed: %s", err)
-            await message.answer(f"Sync failed: {err}")
+            await progress_message.edit_text(f"Sync failed: {err}")
             return
 
-        await message.answer(
+        await progress_message.edit_text(
             "Sync completed\n"
             f"fetched: {stats['fetched']}\n"
             f"with telegram_id: {stats['with_telegram_id']}\n"
             f"created: {stats['created']}\n"
             f"updated: {stats['updated']}\n"
+            f"deleted: {stats['deleted']}\n"
             f"skipped (no telegram_id): {stats['skipped_without_telegram_id']}\n"
             f"skipped (duplicates): {stats['skipped_duplicates']}"
         )
