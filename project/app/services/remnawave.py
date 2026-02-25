@@ -124,10 +124,18 @@ class RemnawaveClient:
 
     async def _get_users_by_path(self, path: str) -> List[RemnawaveUser]:
         users: List[RemnawaveUser] = []
-        limit = 250
+        # Some Remnawave deployments hard-cap page size to 25 and may ignore larger limits.
+        # Use small explicit paging and stop when page yields no new user ids.
+        limit = 25
         offset = 0
-        last_first_id: Optional[str] = None
+        page_size_hint: Optional[int] = None
+        seen_ids: set[str] = set()
+        max_pages = 2000
+        pages_processed = 0
         while True:
+            pages_processed += 1
+            if pages_processed > max_pages:
+                break
             data = await self._request("GET", path, params={"limit": limit, "offset": offset})
             if isinstance(data, str):
                 try:
@@ -137,16 +145,28 @@ class RemnawaveClient:
             items = self._extract_user_items(data)
             if not isinstance(items, list):
                 break
-            if items and isinstance(items[0], dict):
-                first_id = str(items[0].get("uuid") or items[0].get("id") or "")
-                if first_id and first_id == last_first_id:
-                    break
-                last_first_id = first_id
-            for raw in items:
-                users.append(self._map_user(raw))
-            if len(items) < limit:
+            if not items:
                 break
-            offset += limit
+
+            if page_size_hint is None:
+                page_size_hint = len(items)
+
+            new_in_page = 0
+            for raw in items:
+                raw_id = str(raw.get("uuid") or raw.get("id") or "")
+                if raw_id and raw_id in seen_ids:
+                    continue
+                if raw_id:
+                    seen_ids.add(raw_id)
+                users.append(self._map_user(raw))
+                new_in_page += 1
+
+            # Endpoint may ignore offset and keep returning same first page.
+            if new_in_page == 0:
+                break
+
+            step = page_size_hint or len(items) or limit
+            offset += step
         return users
 
     async def get_users(self) -> List[RemnawaveUser]:
