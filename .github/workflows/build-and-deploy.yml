@@ -187,8 +187,20 @@ jobs:
             exit 1
           fi
 
+          requested_env_file="$env_file"
           if [[ ! -f "$env_file" ]]; then
-            echo "Env file not found: $env_file"
+            for candidate in "$db_host_dir/.env" "../.env" ".env"; do
+              if [[ -f "$candidate" ]]; then
+                echo "Requested env file not found, using fallback: $candidate"
+                env_file="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [[ ! -f "$env_file" ]]; then
+            echo "Env file not found. Requested: $requested_env_file"
+            echo "Checked: $db_host_dir/.env ../.env .env"
             exit 1
           fi
 
