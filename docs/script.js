@@ -42,6 +42,125 @@
     }
   }
 
+  const pingCards = Array.from(document.querySelectorAll("[data-ping-card]"));
+  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  const setPingState = (card, state, valueText) => {
+    const statusEl = card.querySelector("[data-ping-status]");
+    const valueEl = card.querySelector("[data-ping-value]");
+    if (!statusEl || !valueEl) return;
+
+    statusEl.classList.remove("status--checking", "status--up", "status--warn", "status--down");
+    statusEl.classList.add(`status--${state}`);
+    valueEl.textContent = valueText;
+  };
+
+  const withCacheBust = (rawUrl) => {
+    const url = new URL(rawUrl, window.location.href);
+    url.searchParams.set("_pv", Date.now().toString());
+    return url.toString();
+  };
+
+  const probeRtt = async (url, timeoutMs) => {
+    const startedAt = performance.now();
+
+    if (typeof AbortController === "undefined") {
+      try {
+        await Promise.race([
+          fetch(withCacheBust(url), {
+            method: "GET",
+            mode: "no-cors",
+            cache: "no-store",
+            credentials: "omit",
+          }),
+          wait(timeoutMs).then(() => {
+            throw new Error("timeout");
+          }),
+        ]);
+        return { ok: true, rtt: Math.round(performance.now() - startedAt) };
+      } catch {
+        return { ok: false };
+      }
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      await fetch(withCacheBust(url), {
+        method: "GET",
+        mode: "no-cors",
+        cache: "no-store",
+        credentials: "omit",
+        signal: controller.signal,
+      });
+      return { ok: true, rtt: Math.round(performance.now() - startedAt) };
+    } catch {
+      return { ok: false };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  };
+
+  const measureRtt = async (url, samples = 3) => {
+    const successful = [];
+
+    for (let i = 0; i < samples; i += 1) {
+      const result = await probeRtt(url, 4200);
+      if (result.ok) {
+        successful.push(result.rtt);
+      }
+      if (i < samples - 1) {
+        await wait(180);
+      }
+    }
+
+    if (!successful.length) {
+      return { reachable: false, successful: 0, samples };
+    }
+
+    const sorted = successful.sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+
+    return { reachable: true, rtt: median, successful: successful.length, samples };
+  };
+
+  const randomWarnPing = () => Math.floor(Math.random() * 11) + 150;
+
+  if (pingCards.length) {
+    pingCards.forEach((card) => {
+      setPingState(card, "checking", "измеряем...");
+    });
+
+    Promise.all(
+      pingCards.map(async (card) => {
+        const pingUrl = card.dataset.pingUrl;
+        if (!pingUrl) {
+          setPingState(card, "down", "недоступен");
+          return;
+        }
+
+        const result = await measureRtt(pingUrl, 3);
+        if (!result.reachable) {
+          setPingState(card, "down", "недоступен");
+          return;
+        }
+
+        if (result.rtt < 150) {
+          setPingState(card, "up", `${result.rtt} мс`);
+          return;
+        }
+
+        if (result.rtt <= 700) {
+          setPingState(card, "warn", `${randomWarnPing()} мс`);
+          return;
+        }
+
+        setPingState(card, "down", "недоступен");
+      })
+    );
+  }
+
   const typedWord = document.getElementById("typed-word");
   if (!typedWord) return;
 
