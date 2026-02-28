@@ -667,26 +667,11 @@ def setup_router(
     def _build_connect_device_text(lang: str, device: Dict[str, Any]) -> str:
         category, _ = _device_category_and_emoji(lang, device)
         name = html.escape(str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip())
-        full_id = html.escape(str(device.get("id") or "").strip())
-        short_id = html.escape(_short_device_id(str(device.get("id") or "").strip()))
-        ip_value = html.escape(str(device.get("ip") or "").strip()) or "—"
-        last_seen = _format_device_seen(str(device.get("last_seen") or "").strip())
-        if not last_seen:
-            last_seen = "—"
-        status_text = (
-            tm.get_text(lang, "my_device_status_online")
-            if device.get("is_online")
-            else tm.get_text(lang, "my_device_status_offline")
-        )
+        uid_value = html.escape(str(device.get("id") or "").strip()) or "—"
         return (
-            f"{tm.get_text(lang, 'my_device_title')}\n\n"
-            f"{tm.get_text(lang, 'my_device_type_line')}: <b>{html.escape(category)}</b>\n"
-            f"{tm.get_text(lang, 'my_device_name_line')}: <b>{name}</b>\n"
-            f"{tm.get_text(lang, 'my_device_id_line')}: <code>{short_id}</code>\n"
-            f"{tm.get_text(lang, 'my_device_full_id_line')}: <code>{full_id}</code>\n"
-            f"{tm.get_text(lang, 'my_device_ip_line')}: <code>{ip_value}</code>\n"
-            f"{tm.get_text(lang, 'my_device_last_seen_line')}: <b>{html.escape(last_seen)}</b>\n"
-            f"{tm.get_text(lang, 'my_device_status_line')}: <b>{html.escape(status_text)}</b>"
+            f"{tm.get_text(lang, 'my_device_type_line')}: {html.escape(category)}\n\n"
+            f"{tm.get_text(lang, 'my_device_name_line')}: {name}\n\n"
+            f"{tm.get_text(lang, 'my_device_uid_line')}: {uid_value}"
         )
 
     def _build_connect_devices_markup(lang: str, owner_id: int, devices: List[Dict[str, Any]]) -> InlineKeyboardMarkup:

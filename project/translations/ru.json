@@ -32,6 +32,7 @@
   "my_device_title": "<b>Устройство</b>",
   "my_device_type_line": "Тип",
   "my_device_name_line": "Название",
+  "my_device_uid_line": "UID",
   "my_device_id_line": "ID",
   "my_device_full_id_line": "Полный ID",
   "my_device_ip_line": "IP",
