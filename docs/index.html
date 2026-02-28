@@ -1,0 +1,167 @@
+﻿<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="PaketVPN — минималистичный VPN-сервис с быстрым подключением через Telegram и прозрачными тарифами.">
+  <title>PaketVPN | Дизайн лендинга</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg bg--soft"></div>
+
+  <header class="topbar">
+    <a class="brand-box" href="#top">
+      <span class="brand-mark">
+        <img class="brand-logo" src="logo.jpg" alt="PaketVPN logo" width="36" height="36">
+      </span>
+      <span class="brand">PaketVPN</span>
+    </a>
+    <nav class="menu">
+      <a href="#locations">Локации</a>
+      <a href="#benefits">Преимущества</a>
+      <a href="#plans">Тарифы</a>
+    </nav>
+    <a class="btn btn--primary" href="https://t.me/vpnpaketbot" target="_blank" rel="noreferrer">Подключиться</a>
+  </header>
+
+  <main id="top" class="layout">
+    <section class="hero panel">
+      <div class="hero__content">
+        <p class="kicker">PaketVPN</p>
+        <h1 class="hero__title">
+          Твой доступ к
+          <span class="hero__word-wrap">
+            <span id="typed-word" class="hero__typing-word">свободному</span>
+            <span class="hero__caret" aria-hidden="true">|</span>
+          </span>
+          интернету.
+        </h1>
+        <p class="hero__lead">Безопасное подключение, стабильная скорость и приватность для каждого устройства.</p>
+        <div class="hero__actions">
+          <a class="btn btn--primary btn--glow" href="https://t.me/vpnpaketbot" target="_blank" rel="noreferrer">Подключиться</a>
+        </div>
+        <p class="hero__note">Пробный доступ: 3 дня / 15 ГБ</p>
+      </div>
+    </section>
+
+    <section id="locations" class="section panel">
+      <div class="section__head">
+        <p class="kicker">Локации</p>
+        <h2>Выбор локаций</h2>
+      </div>
+      <div class="locations">
+        <article class="location-card" data-reveal>
+          <h3><span class="flag flag--pl" aria-hidden="true"></span> Польша</h3>
+          <p class="status status--up">
+            <span class="status-dot" aria-hidden="true"></span>
+            Пинг: <strong>76 мс</strong> · Потери: <strong>0%</strong>
+          </p>
+        </article>
+        <article class="location-card" data-reveal>
+          <h3><span class="flag flag--nl" aria-hidden="true"></span> Нидерланды</h3>
+          <p class="status status--up">
+            <span class="status-dot" aria-hidden="true"></span>
+            Пинг: <strong>70 мс</strong> · Потери: <strong>0%</strong>
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="benefits" class="section panel">
+      <div class="section__head">
+        <p class="kicker">Преимущества</p>
+        <h2>Преимущества сервиса</h2>
+      </div>
+      <div class="benefits">
+        <article class="benefit" data-reveal>
+          <div class="icon-wrap">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M8 33h10l4-18 5 22 4-13h9" />
+            </svg>
+          </div>
+          <h3>Высокая скорость</h3>
+          <p>Стабильный канал без перегруза.</p>
+        </article>
+        <article class="benefit" data-reveal>
+          <div class="icon-wrap">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M24 5 40 11v13c0 12-7 19-16 23C15 43 8 36 8 24V11L24 5Z" />
+            </svg>
+          </div>
+          <h3>Низкая цена</h3>
+          <p>Тарифы без скрытых платежей.</p>
+        </article>
+        <article class="benefit" data-reveal>
+          <div class="icon-wrap">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M10 10h28v20H20l-8 8v-8h-2z" />
+              <path d="M18 19h12M18 24h8" />
+            </svg>
+          </div>
+          <h3>Поддержка</h3>
+          <p>Помощь в Telegram 24/7.</p>
+        </article>
+        <article class="benefit" data-reveal>
+          <div class="icon-wrap">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M8 24h32M24 8v32" />
+              <circle cx="24" cy="24" r="14" />
+            </svg>
+          </div>
+          <h3>Простой старт</h3>
+          <p>Подключение в пару кликов.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="plans" class="section panel">
+      <div class="section__head">
+        <p class="kicker">Тарифы</p>
+        <h2>Тарифы без скрытых условий</h2>
+      </div>
+      <div class="plans">
+        <article class="plan" data-reveal>
+          <p class="plan__name">Base</p>
+          <p class="plan__price">99 ₽</p>
+          <p class="plan__meta">в месяц</p>
+          <ul>
+            <li>100 ГБ трафика</li>
+            <li>Пробный 3 дня / 15 ГБ</li>
+          </ul>
+          <a class="btn btn--ghost btn--full" href="https://t.me/vpnpaketbot" target="_blank" rel="noreferrer">Выбрать</a>
+        </article>
+        <article class="plan plan--featured" data-reveal>
+          <p class="plan__name">Duo</p>
+          <p class="plan__price">149 ₽</p>
+          <p class="plan__meta">в месяц</p>
+          <ul>
+            <li>6 устройств</li>
+            <li>200 ГБ трафика</li>
+          </ul>
+          <a class="btn btn--primary btn--full" href="https://t.me/vpnpaketbot" target="_blank" rel="noreferrer">Подключить Duo</a>
+        </article>
+        <article class="plan" data-reveal>
+          <p class="plan__name">Family</p>
+          <p class="plan__price">199 ₽</p>
+          <p class="plan__meta">в месяц</p>
+          <ul>
+            <li>10 устройств</li>
+            <li>300 ГБ трафика</li>
+          </ul>
+          <a class="btn btn--ghost btn--full" href="https://t.me/vpnpaketbot" target="_blank" rel="noreferrer">Подключить Family</a>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>PaketVPN</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
