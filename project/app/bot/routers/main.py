@@ -51,6 +51,7 @@ CallbackStart = "start"
 CallbackConnect = "connect"
 CallbackConnectInstructions = "connect_instructions"
 CallbackConnectDevices = "connect_devices"
+CallbackConnectDeviceOpen = "connect_device_open"
 CallbackConnectDeviceDetach = "connect_device_detach"
 CallbackSettings = "settings"
 CallbackSettingsToggleNotifications = "settings_toggle_notifications"
@@ -225,7 +226,7 @@ def setup_router(
     promo_admin_state: Dict[int, Dict[str, Any]] = {}
     panel_state: Dict[int, Dict[str, Any]] = {}
     gift_state: Dict[int, Dict[str, Any]] = {}
-    connect_device_state: Dict[int, Dict[str, str]] = {}
+    connect_device_state: Dict[int, Dict[str, Dict[str, Any]]] = {}
     pending_captcha: Dict[int, Dict[str, Any]] = {}
     pending_start_promo: Dict[int, str] = {}
 
@@ -547,6 +548,10 @@ def setup_router(
                 pass
         return f"➕ {gb} GB ({stars}⭐)"
 
+    DEVICE_EMOJI_IPHONE = "5775870512127283512"
+    DEVICE_EMOJI_PHONE = "6033070647213560346"
+    DEVICE_EMOJI_PC = "5841530748082851696"
+
     def _utc_now_text() -> str:
         return datetime.utcnow().strftime("%d.%m.%Y %H:%M:%S")
 
@@ -577,7 +582,50 @@ def setup_router(
         name = str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip()
         if len(name) > 20:
             name = name[:17] + "..."
-        return tm.get_text(lang, "my_devices_detach_button") % f"{index}. {name}"
+        category, _ = _device_category_and_emoji(lang, device)
+        return tm.get_text(lang, "my_devices_item_button") % (index, category, name)
+
+    def _device_category_and_emoji(lang: str, device: Dict[str, Any]) -> Tuple[str, str]:
+        raw = device.get("raw")
+        blob_parts: List[str] = [
+            str(device.get("name") or ""),
+            str(device.get("ip") or ""),
+            str(device.get("last_seen") or ""),
+        ]
+        if isinstance(raw, dict):
+            blob_parts.extend(
+                [
+                    str(raw.get("platform") or ""),
+                    str(raw.get("os") or ""),
+                    str(raw.get("deviceModel") or raw.get("device_model") or ""),
+                    str(raw.get("userAgent") or raw.get("user_agent") or ""),
+                ]
+            )
+        blob = " ".join(blob_parts).lower()
+
+        if "iphone" in blob:
+            return tm.get_text(lang, "my_devices_type_iphone"), DEVICE_EMOJI_IPHONE
+
+        phone_markers = [
+            "android",
+            "mobile",
+            "phone",
+            "samsung",
+            "xiaomi",
+            "redmi",
+            "huawei",
+            "honor",
+            "pixel",
+            "oneplus",
+            "realme",
+            "oppo",
+            "vivo",
+            "ios",
+            "ipad",
+        ]
+        if any(marker in blob for marker in phone_markers):
+            return tm.get_text(lang, "my_devices_type_phone"), DEVICE_EMOJI_PHONE
+        return tm.get_text(lang, "my_devices_type_pc"), DEVICE_EMOJI_PC
 
     def _build_connect_devices_text(
         lang: str,
@@ -588,47 +636,62 @@ def setup_router(
         used_value = used_count if used_count is not None else len(devices)
         if limit_count is not None:
             remaining = max(0, int(limit_count) - int(used_value))
-            summary = tm.get_text(lang, "my_devices_summary_full") % (used_value, int(limit_count), remaining)
+            lines: List[str] = [
+                tm.get_text(lang, "my_devices_title"),
+                "",
+                tm.get_text(lang, "my_devices_connected_line") % (used_value, int(limit_count)),
+                tm.get_text(lang, "my_devices_remaining_line") % remaining,
+                "",
+                tm.get_text(lang, "my_devices_list_title"),
+            ]
         elif used_count is not None or devices:
-            summary = tm.get_text(lang, "my_devices_summary_used_only") % used_value
+            lines = [
+                tm.get_text(lang, "my_devices_title"),
+                "",
+                tm.get_text(lang, "my_devices_summary_used_only") % used_value,
+                "",
+                tm.get_text(lang, "my_devices_list_title"),
+            ]
         else:
-            summary = tm.get_text(lang, "my_devices_summary_unknown")
-
-        lines: List[str] = [tm.get_text(lang, "my_devices_title"), "", summary]
+            lines = [
+                tm.get_text(lang, "my_devices_title"),
+                "",
+                tm.get_text(lang, "my_devices_summary_unknown"),
+                "",
+                tm.get_text(lang, "my_devices_list_title"),
+            ]
         if not devices:
             lines.extend(["", tm.get_text(lang, "my_devices_empty")])
-            return "\n".join(lines)
+        return "\n".join(lines)
 
-        lines.extend(["", tm.get_text(lang, "my_devices_list_title")])
-        max_items = 10
-        for idx, device in enumerate(devices[:max_items], start=1):
-            name = html.escape(str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip())
-            lines.append(f"{idx}. <b>{name}</b>")
-
-            device_id = _short_device_id(str(device.get("id") or "").strip())
-            if device_id:
-                lines.append(tm.get_text(lang, "my_devices_line_id") % html.escape(device_id))
-
-            ip_value = str(device.get("ip") or "").strip()
-            if ip_value:
-                lines.append(tm.get_text(lang, "my_devices_line_ip") % html.escape(ip_value))
-
-            last_seen = _format_device_seen(str(device.get("last_seen") or "").strip())
-            if last_seen:
-                lines.append(tm.get_text(lang, "my_devices_line_last_seen") % html.escape(last_seen))
-
-            if device.get("is_online"):
-                lines.append(tm.get_text(lang, "my_devices_line_online"))
-            lines.append("")
-
-        if len(devices) > max_items:
-            lines.append(tm.get_text(lang, "my_devices_more") % (len(devices) - max_items))
-
-        return "\n".join(lines).strip()
+    def _build_connect_device_text(lang: str, device: Dict[str, Any]) -> str:
+        category, _ = _device_category_and_emoji(lang, device)
+        name = html.escape(str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip())
+        full_id = html.escape(str(device.get("id") or "").strip())
+        short_id = html.escape(_short_device_id(str(device.get("id") or "").strip()))
+        ip_value = html.escape(str(device.get("ip") or "").strip()) or "—"
+        last_seen = _format_device_seen(str(device.get("last_seen") or "").strip())
+        if not last_seen:
+            last_seen = "—"
+        status_text = (
+            tm.get_text(lang, "my_device_status_online")
+            if device.get("is_online")
+            else tm.get_text(lang, "my_device_status_offline")
+        )
+        return (
+            f"{tm.get_text(lang, 'my_device_title')}\n\n"
+            f"{tm.get_text(lang, 'my_device_type_line')}: <b>{html.escape(category)}</b>\n"
+            f"{tm.get_text(lang, 'my_device_name_line')}: <b>{name}</b>\n"
+            f"{tm.get_text(lang, 'my_device_id_line')}: <code>{short_id}</code>\n"
+            f"{tm.get_text(lang, 'my_device_full_id_line')}: <code>{full_id}</code>\n"
+            f"{tm.get_text(lang, 'my_device_ip_line')}: <code>{ip_value}</code>\n"
+            f"{tm.get_text(lang, 'my_device_last_seen_line')}: <b>{html.escape(last_seen)}</b>\n"
+            f"{tm.get_text(lang, 'my_device_status_line')}: <b>{html.escape(status_text)}</b>"
+        )
 
     def _build_connect_devices_markup(lang: str, owner_id: int, devices: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         rows: List[List[InlineKeyboardButton]] = []
-        device_map: Dict[str, str] = {}
+        device_map: Dict[str, Dict[str, Any]] = {}
         max_items = 10
 
         for idx, device in enumerate(devices[:max_items], start=1):
@@ -636,12 +699,14 @@ def setup_router(
             if not device_id:
                 continue
             key = str(idx)
-            device_map[key] = device_id
+            device_map[key] = device
+            _, emoji_id = _device_category_and_emoji(lang, device)
             rows.append(
                 [
                     InlineKeyboardButton(
                         text=_device_button_label(lang, idx, device),
-                        callback_data=f"{CallbackConnectDeviceDetach}?k={key}",
+                        callback_data=f"{CallbackConnectDeviceOpen}?k={key}",
+                        icon_custom_emoji_id=emoji_id,
                     )
                 ]
             )
@@ -663,6 +728,26 @@ def setup_router(
             ]
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _build_connect_device_markup(lang: str, key: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=tm.get_text(lang, "my_devices_detach_selected_button"),
+                        callback_data=f"{CallbackConnectDeviceDetach}?k={key}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=tm.get_text(lang, "back_button"),
+                        callback_data=CallbackConnectDevices,
+                        style="primary",
+                        icon_custom_emoji_id=_button_emoji_id(lang, "back_button"),
+                    )
+                ],
+            ]
+        )
 
     async def _get_connect_devices_panel(lang: str, owner_id: int, telegram_id: int) -> Tuple[str, InlineKeyboardMarkup]:
         devices, used_count, limit_count = await payment_service.remnawave_client.get_user_devices_by_telegram(telegram_id)
@@ -1361,6 +1446,29 @@ def setup_router(
         await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
         await callback.answer()
 
+    @router.callback_query(F.data.startswith(f"{CallbackConnectDeviceOpen}?"))
+    async def connect_device_open_callback(callback: CallbackQuery) -> None:
+        customer = await customer_repo.find_by_telegram_id(callback.message.chat.id)
+        if not customer:
+            await callback.answer()
+            return
+        lang = customer.language or callback.from_user.language_code or config.default_language
+        params = parse_callback_data(callback.data or "")
+        key = (params.get("k") or "").strip()
+        device = connect_device_state.get(callback.from_user.id, {}).get(key)
+        if not device:
+            await callback.answer(tm.get_text(lang, "my_devices_state_expired"), show_alert=True)
+            text, markup = await _get_connect_devices_panel(lang, callback.from_user.id, customer.telegram_id)
+            await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+            return
+
+        await callback.message.edit_text(
+            _build_connect_device_text(lang, device),
+            reply_markup=_build_connect_device_markup(lang, key),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+
     @router.callback_query(F.data.startswith(f"{CallbackConnectDeviceDetach}?"))
     async def connect_device_detach_callback(callback: CallbackQuery) -> None:
         customer = await customer_repo.find_by_telegram_id(callback.message.chat.id)
@@ -1371,7 +1479,8 @@ def setup_router(
         lang = customer.language or callback.from_user.language_code or config.default_language
         params = parse_callback_data(callback.data or "")
         key = (params.get("k") or "").strip()
-        device_id = connect_device_state.get(callback.from_user.id, {}).get(key)
+        device = connect_device_state.get(callback.from_user.id, {}).get(key) or {}
+        device_id = str(device.get("id") or "").strip()
         if not device_id:
             await callback.answer(tm.get_text(lang, "my_devices_state_expired"), show_alert=True)
         else:
@@ -2028,11 +2137,7 @@ def setup_router(
                 InlineKeyboardButton(
                     text=tm.get_text(lang, "connect_instructions_button"),
                     callback_data=CallbackConnectInstructions,
-                )
-            ]
-        )
-        buttons.append(
-            [
+                ),
                 InlineKeyboardButton(
                     text=tm.get_text(lang, "my_devices_button"),
                     callback_data=CallbackConnectDevices,
