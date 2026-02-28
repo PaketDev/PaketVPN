@@ -230,7 +230,7 @@ class PaymentService:
                 ]
             )
             try:
-                await self.bot.send_message(member_id, notify_text, parse_mode="HTML")
+                await self.bot.send_message(member_id, notify_text, parse_mode="HTML", disable_web_page_preview=True)
             except Exception as err:  # noqa: BLE001
                 logger.warning("failed to notify duo member=%s for purchase=%s: %s", member_id, purchase.id, err)
                 await self.gift_notification_repo.create(

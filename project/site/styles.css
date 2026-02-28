@@ -707,6 +707,11 @@ details p {
   align-items: center;
 }
 
+.footer__brand {
+  display: grid;
+  gap: 6px;
+}
+
 .footer__actions {
   display: flex;
   gap: 10px;

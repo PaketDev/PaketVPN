@@ -768,6 +768,22 @@ class RemnawaveClient:
         updated = await self._request("PATCH", "/api/users", json=payload)
         return self._map_user(updated.get("response", updated))
 
+    async def set_user_email_by_telegram(self, telegram_id: int, email: Optional[str]) -> Optional[RemnawaveUser]:
+        user = await self._get_user_by_telegram(telegram_id)
+        if not user:
+            return None
+        limit_bytes = int(user.traffic_limit_bytes or config.traffic_limit_bytes)
+        payload = self._build_update_payload(
+            user=user,
+            traffic_limit_bytes=limit_bytes,
+            days=0,
+            description=user.description,
+            expire_at=user.expire_at,
+        )
+        payload["email"] = (email or "").strip().lower()
+        updated = await self._request("PATCH", "/api/users", json=payload)
+        return self._map_user(updated.get("response", updated))
+
     def _select_squads(self, is_trial_user: bool) -> List[str]:
         squads = config.trial_internal_squads if is_trial_user and config.trial_internal_squads else config.squad_uuids
         if squads:

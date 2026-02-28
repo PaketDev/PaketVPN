@@ -5,6 +5,7 @@ import html
 import logging
 import math
 import random
+import re
 import string
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -57,6 +58,7 @@ CallbackSettings = "settings"
 CallbackSettingsToggleNotifications = "settings_toggle_notifications"
 CallbackSettingsToggleBroadcast = "settings_toggle_broadcast"
 CallbackSettingsLanguage = "settings_language"
+CallbackSettingsBindEmail = "settings_bind_email"
 CallbackLanguage = "lang"
 CallbackPayment = "payment"
 CallbackTrial = "trial"
@@ -177,6 +179,18 @@ def build_connect_instructions_text(customer: Customer, lang: str, tm: Translati
     info_parts = [tm.get_text(lang, "connect_instructions")]
     if customer.subscription_link:
         info_parts.append(tm.get_text(lang, "connect_instruction_link_note"))
+    help_links: List[str] = []
+    if config.support_url:
+        help_links.append(f"• <a href=\"{html.escape(config.support_url, quote=True)}\"><b>{html.escape(tm.get_text(lang, 'support_button'))}</b></a>")
+    if config.channel_url:
+        help_links.append(f"• <a href=\"{html.escape(config.channel_url, quote=True)}\"><b>{html.escape(tm.get_text(lang, 'channel_button'))}</b></a>")
+    if config.server_status_url:
+        help_links.append(
+            f"• <a href=\"{html.escape(config.server_status_url, quote=True)}\"><b>{html.escape(tm.get_text(lang, 'server_status_button'))}</b></a>"
+        )
+    if help_links:
+        info_parts.append(tm.get_text(lang, "connect_instruction_help_links_title"))
+        info_parts.append("\n".join(help_links))
     if customer.subscription_link and not config.mini_app_url and not config.is_web_app_link:
         info_parts.append(tm.get_text(lang, "subscription_link") % customer.subscription_link)
     return "\n\n".join(info_parts)
@@ -229,6 +243,7 @@ def setup_router(
     connect_device_state: Dict[int, Dict[str, Dict[str, Any]]] = {}
     pending_captcha: Dict[int, Dict[str, Any]] = {}
     pending_start_promo: Dict[int, str] = {}
+    pending_settings_email: Set[int] = set()
 
     def _button_emoji_id(lang: str, key: str) -> Optional[str]:
         value = tm.get_text(lang, f"{key}_emoji_id")
@@ -490,6 +505,13 @@ def setup_router(
                 ],
                 [
                     InlineKeyboardButton(
+                        text=tm.get_text(lang, "settings_email_button"),
+                        callback_data=CallbackSettingsBindEmail,
+                        icon_custom_emoji_id=_button_emoji_id(lang, "settings_email_button"),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         text=tm.get_text(lang, "settings_notifications_button") % notifications_state,
                         callback_data=CallbackSettingsToggleNotifications,
                         icon_custom_emoji_id=_button_emoji_id(lang, notifications_emoji_key),
@@ -503,6 +525,20 @@ def setup_router(
                     )
                 ],
                 [InlineKeyboardButton(text=tm.get_text(lang, "back_button"), callback_data=CallbackStart, style="primary", icon_custom_emoji_id=_button_emoji_id(lang, "back_button"))],
+            ]
+        )
+
+    def _settings_bind_email_keyboard(lang: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=tm.get_text(lang, "back_button"),
+                        callback_data=CallbackSettings,
+                        style="primary",
+                        icon_custom_emoji_id=_button_emoji_id(lang, "back_button"),
+                    )
+                ]
             ]
         )
 
@@ -560,6 +596,25 @@ def setup_router(
         if len(value) <= 18:
             return value
         return f"{value[:8]}...{value[-6:]}"
+
+    def _strip_html_tags(value: str) -> str:
+        return re.sub(r"<[^>]*>", "", value or "")
+
+    def _format_device_label_value_line(raw_line: str) -> str:
+        clean = _strip_html_tags(raw_line).strip()
+        label, separator, value = clean.partition(":")
+        if not separator:
+            return f"<b>{html.escape(clean)}</b>"
+        if not value.strip():
+            return f"<b>{html.escape(label.strip())}:</b>"
+        return f"<b>{html.escape(label.strip())}:</b> <i>{html.escape(value.strip())}</i>"
+
+    def _is_valid_email(value: str) -> bool:
+        email = (value or "").strip()
+        if not email or len(email) > 254 or any(ch.isspace() for ch in email):
+            return False
+        pattern = r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+        return re.fullmatch(pattern, email) is not None
 
     def _format_device_seen(raw_value: str) -> str:
         value = (raw_value or "").strip()
@@ -634,44 +689,46 @@ def setup_router(
         limit_count: Optional[int],
     ) -> str:
         used_value = used_count if used_count is not None else len(devices)
+        title = f"<b>{html.escape(tm.get_text(lang, 'my_devices_title'))}</b>"
+        list_title = _format_device_label_value_line(tm.get_text(lang, "my_devices_list_title"))
         if limit_count is not None:
             remaining = max(0, int(limit_count) - int(used_value))
             lines: List[str] = [
-                tm.get_text(lang, "my_devices_title"),
+                title,
                 "",
-                tm.get_text(lang, "my_devices_connected_line") % (used_value, int(limit_count)),
-                tm.get_text(lang, "my_devices_remaining_line") % remaining,
+                _format_device_label_value_line(tm.get_text(lang, "my_devices_connected_line") % (used_value, int(limit_count))),
+                _format_device_label_value_line(tm.get_text(lang, "my_devices_remaining_line") % remaining),
                 "",
-                tm.get_text(lang, "my_devices_list_title"),
+                list_title,
             ]
         elif used_count is not None or devices:
             lines = [
-                tm.get_text(lang, "my_devices_title"),
+                title,
                 "",
-                tm.get_text(lang, "my_devices_summary_used_only") % used_value,
+                _format_device_label_value_line(tm.get_text(lang, "my_devices_summary_used_only") % used_value),
                 "",
-                tm.get_text(lang, "my_devices_list_title"),
+                list_title,
             ]
         else:
             lines = [
-                tm.get_text(lang, "my_devices_title"),
+                title,
                 "",
-                tm.get_text(lang, "my_devices_summary_unknown"),
+                f"<i>{html.escape(_strip_html_tags(tm.get_text(lang, 'my_devices_summary_unknown')).strip())}</i>",
                 "",
-                tm.get_text(lang, "my_devices_list_title"),
+                list_title,
             ]
         if not devices:
-            lines.extend(["", tm.get_text(lang, "my_devices_empty")])
+            lines.extend(["", f"<i>{html.escape(_strip_html_tags(tm.get_text(lang, 'my_devices_empty')).strip())}</i>"])
         return "\n".join(lines)
 
     def _build_connect_device_text(lang: str, device: Dict[str, Any]) -> str:
         category, _ = _device_category_and_emoji(lang, device)
         name = html.escape(str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip())
-        uid_value = html.escape(str(device.get("id") or "").strip()) or "—"
+        uid_value = html.escape(str(device.get("id") or "").strip()) or "-"
         return (
-            f"{tm.get_text(lang, 'my_device_type_line')}: {html.escape(category)}\n\n"
-            f"{tm.get_text(lang, 'my_device_name_line')}: {name}\n\n"
-            f"{tm.get_text(lang, 'my_device_uid_line')}: {uid_value}"
+            f"<b>{html.escape(tm.get_text(lang, 'my_device_type_line'))}:</b> <i>{html.escape(category)}</i>\n\n"
+            f"<b>{html.escape(tm.get_text(lang, 'my_device_name_line'))}:</b> <i>{name}</i>\n\n"
+            f"<b>{html.escape(tm.get_text(lang, 'my_device_uid_line'))}:</b> <i>{uid_value}</i>"
         )
 
     def _build_connect_devices_markup(lang: str, owner_id: int, devices: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
@@ -1311,6 +1368,7 @@ def setup_router(
         if not customer:
             await callback.answer()
             return
+        pending_settings_email.discard(callback.from_user.id)
         lang = customer.language or callback.from_user.language_code or config.default_language
         await callback.message.edit_text(
             tm.get_text(lang, "settings_title"),
@@ -1325,10 +1383,26 @@ def setup_router(
         if not customer:
             await callback.answer()
             return
+        pending_settings_email.discard(callback.from_user.id)
         lang = customer.language or callback.from_user.language_code or config.default_language
         await callback.message.edit_text(
             tm.get_text(lang, "language_choose_prompt"),
             reply_markup=_language_keyboard(lang, CallbackSettings),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == CallbackSettingsBindEmail)
+    async def settings_bind_email_callback(callback: CallbackQuery) -> None:
+        customer = await customer_repo.find_by_telegram_id(callback.from_user.id)
+        if not customer:
+            await callback.answer()
+            return
+        lang = customer.language or callback.from_user.language_code or config.default_language
+        pending_settings_email.add(callback.from_user.id)
+        await callback.message.edit_text(
+            tm.get_text(lang, "settings_email_prompt"),
+            reply_markup=_settings_bind_email_keyboard(lang),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -1339,6 +1413,7 @@ def setup_router(
         if not customer:
             await callback.answer()
             return
+        pending_settings_email.discard(callback.from_user.id)
         new_value = 0 if customer.notifications_enabled else 1
         await customer_repo.update_fields(customer.id, {"notifications_enabled": new_value})
         customer = await customer_repo.find_by_telegram_id(callback.from_user.id)
@@ -1360,6 +1435,7 @@ def setup_router(
         if not customer:
             await callback.answer()
             return
+        pending_settings_email.discard(callback.from_user.id)
         new_value = 0 if customer.broadcast_enabled else 1
         await customer_repo.update_fields(customer.id, {"broadcast_enabled": new_value})
         customer = await customer_repo.find_by_telegram_id(callback.from_user.id)
@@ -1388,6 +1464,7 @@ def setup_router(
             build_connect_text(customer, lang, tm, traffic_text),
             reply_markup=markup,
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
     @router.callback_query(F.data == CallbackConnect)
@@ -1403,6 +1480,7 @@ def setup_router(
             build_connect_text(customer, lang, tm, traffic_text),
             reply_markup=markup,
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
         await callback.answer()
 
@@ -1417,6 +1495,7 @@ def setup_router(
             build_connect_instructions_text(customer, lang, tm),
             reply_markup=_connect_instructions_markup(lang),
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
         await callback.answer()
 
@@ -2869,6 +2948,44 @@ def setup_router(
     async def promo_text_handler(message: Message) -> None:
         lang = message.from_user.language_code or config.default_language
         text_val = message.text.strip()
+
+        if message.from_user.id in pending_settings_email:
+            customer = await customer_repo.find_by_telegram_id(message.from_user.id)
+            if not customer:
+                pending_settings_email.discard(message.from_user.id)
+                return
+            lang = customer.language or message.from_user.language_code or config.default_language
+            clear_requested = text_val == "-"
+            normalized_email = text_val.strip().lower()
+            if not clear_requested and not _is_valid_email(normalized_email):
+                await message.answer(tm.get_text(lang, "settings_email_invalid"), parse_mode="HTML")
+                return
+            try:
+                updated = await payment_service.remnawave_client.set_user_email_by_telegram(
+                    customer.telegram_id,
+                    None if clear_requested else normalized_email,
+                )
+            except Exception as err:  # noqa: BLE001
+                logger.warning("failed to bind email telegram_id=%s: %s", customer.telegram_id, err)
+                await message.answer(tm.get_text(lang, "settings_email_failed"), parse_mode="HTML")
+                return
+            if not updated:
+                await message.answer(tm.get_text(lang, "settings_email_not_found"), parse_mode="HTML")
+                return
+            pending_settings_email.discard(message.from_user.id)
+            if clear_requested:
+                await message.answer(tm.get_text(lang, "settings_email_cleared"), parse_mode="HTML")
+            else:
+                await message.answer(
+                    tm.get_text(lang, "settings_email_saved") % html.escape(normalized_email),
+                    parse_mode="HTML",
+                )
+            await message.answer(
+                tm.get_text(lang, "settings_title"),
+                reply_markup=_settings_keyboard(customer, lang),
+                parse_mode="HTML",
+            )
+            return
 
         # Admin panel actions via text input after inline selection.
         if (
