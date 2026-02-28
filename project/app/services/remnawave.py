@@ -270,6 +270,56 @@ class RemnawaveClient:
     async def fetch_user_by_telegram(self, telegram_id: int) -> Optional[RemnawaveUser]:
         return await self._get_user_by_telegram(telegram_id)
 
+    def _extract_user_object(self, data: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(data, dict):
+            if data.get("uuid") and (
+                data.get("expireAt")
+                or data.get("expire_at")
+                or data.get("username")
+                or data.get("telegramId")
+                or data.get("telegram_id")
+            ):
+                return data
+
+            for key in ("response", "data", "result", "user", "item"):
+                if key not in data:
+                    continue
+                nested = self._extract_user_object(data.get(key))
+                if nested:
+                    return nested
+
+            for value in data.values():
+                nested = self._extract_user_object(value)
+                if nested:
+                    return nested
+            return None
+
+        if isinstance(data, list):
+            for item in data:
+                nested = self._extract_user_object(item)
+                if nested:
+                    return nested
+        return None
+
+    async def _get_user_by_uuid(self, user_uuid: str) -> Optional[RemnawaveUser]:
+        if not user_uuid:
+            return None
+        for path in (f"/api/users/{user_uuid}", f"/users/{user_uuid}"):
+            try:
+                data = await self._request("GET", path)
+            except Exception:
+                continue
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+            raw_user = self._extract_user_object(data)
+            if not raw_user:
+                continue
+            return self._map_user(raw_user)
+        return None
+
     def _extract_device_candidates(self, payload: Any, parent_key: str = "") -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         parent_lower = parent_key.lower()
@@ -336,6 +386,7 @@ class RemnawaveClient:
             or raw_device.get("device_id")
             or raw_device.get("sourceDeviceId")
             or raw_device.get("source_device_id")
+            or raw_device.get("hwid")
             or raw_device.get("clientId")
             or raw_device.get("client_id")
             or raw_device.get("id")
@@ -351,6 +402,8 @@ class RemnawaveClient:
             or raw_device.get("name")
             or raw_device.get("title")
             or raw_device.get("remark")
+            or raw_device.get("deviceModel")
+            or raw_device.get("device_model")
             or raw_device.get("userAgent")
             or raw_device.get("user_agent")
             or ""
@@ -384,6 +437,8 @@ class RemnawaveClient:
             or raw_device.get("last_seen")
             or raw_device.get("updatedAt")
             or raw_device.get("updated_at")
+            or raw_device.get("createdAt")
+            or raw_device.get("created_at")
         )
         last_seen = str(last_seen_value).strip() if last_seen_value is not None else ""
 
@@ -431,6 +486,8 @@ class RemnawaveClient:
                 "max_devices",
                 "activeDeviceLimit",
                 "active_device_limit",
+                "hwidDeviceLimit",
+                "hwid_device_limit",
                 "ipLimit",
                 "ip_limit",
                 "limitIp",
@@ -481,12 +538,62 @@ class RemnawaveClient:
 
         return used, limit
 
+    def _extract_hwid_devices_payload(self, data: Any) -> tuple[List[Dict[str, Any]], Optional[int]]:
+        payload = data
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return [], None
+
+        containers: List[Any] = []
+        if isinstance(payload, dict):
+            containers.append(payload)
+            for key in ("response", "data", "result"):
+                if key in payload and isinstance(payload.get(key), dict):
+                    containers.append(payload.get(key))
+        elif isinstance(payload, list):
+            containers.append({"devices": payload, "total": len(payload)})
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            raw_devices = container.get("devices")
+            if isinstance(raw_devices, list):
+                total = _pick_int(container, ["total", "count", "devicesCount", "devices_count"])
+                return [item for item in raw_devices if isinstance(item, dict)], total
+        return [], None
+
+    async def _get_hwid_devices(self, user_uuid: str) -> tuple[List[Dict[str, Any]], Optional[int]]:
+        if not user_uuid:
+            return [], None
+        candidates = [
+            ("GET", f"/api/hwid/devices/{user_uuid}", None),
+            ("GET", f"/hwid/devices/{user_uuid}", None),
+            ("GET", f"/api/hwid/devices", {"userUuid": user_uuid}),
+            ("GET", f"/hwid/devices", {"userUuid": user_uuid}),
+            ("GET", f"/api/users/{user_uuid}/devices", None),
+            ("GET", f"/users/{user_uuid}/devices", None),
+        ]
+        for method, path, params in candidates:
+            try:
+                data = await self._request(method, path, params=params)
+            except Exception:
+                continue
+            devices, total = self._extract_hwid_devices_payload(data)
+            if devices or total is not None:
+                return devices, total
+        return [], None
+
     async def get_user_devices_by_telegram(self, telegram_id: int) -> tuple[List[Dict[str, Any]], Optional[int], Optional[int]]:
         user = await self._get_user_by_telegram(telegram_id)
-        if not user or not isinstance(user.raw, dict):
+        if not user:
             return [], None, None
+        raw_user = user.raw if isinstance(user.raw, dict) else {}
 
-        raw_devices = self._extract_device_candidates(user.raw)
+        raw_devices = self._extract_device_candidates(raw_user)
+        hwid_devices, hwid_total = await self._get_hwid_devices(user.uuid)
+        raw_devices.extend(hwid_devices)
         devices: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for raw_device in raw_devices:
@@ -499,7 +606,17 @@ class RemnawaveClient:
             seen.add(marker)
             devices.append(normalized)
 
-        used, limit = self._extract_device_usage(user.raw, devices)
+        used, limit = self._extract_device_usage(raw_user, devices)
+        if hwid_total is not None:
+            used = hwid_total
+        if limit is None:
+            full_user = await self._get_user_by_uuid(user.uuid)
+            if full_user and isinstance(full_user.raw, dict):
+                _, detail_limit = self._extract_device_usage(full_user.raw, devices)
+                if detail_limit is not None:
+                    limit = detail_limit
+        if used is None and devices:
+            used = len(devices)
         return devices, used, limit
 
     async def unlink_user_device(self, user_uuid: str, device_id: str, telegram_id: Optional[int] = None) -> bool:
@@ -508,6 +625,8 @@ class RemnawaveClient:
 
         encoded_device_id = quote(str(device_id), safe="")
         candidates: List[tuple[str, str, Optional[Dict[str, Any]]]] = [
+            ("POST", "/api/hwid/devices/delete", {"userUuid": user_uuid, "hwid": device_id}),
+            ("POST", "/hwid/devices/delete", {"userUuid": user_uuid, "hwid": device_id}),
             ("DELETE", f"/api/users/{user_uuid}/devices/{encoded_device_id}", None),
             ("DELETE", f"/users/{user_uuid}/devices/{encoded_device_id}", None),
             ("POST", f"/api/users/{user_uuid}/devices/{encoded_device_id}/disconnect", None),
