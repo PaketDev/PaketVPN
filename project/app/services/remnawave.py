@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import aiohttp
 
@@ -268,6 +269,287 @@ class RemnawaveClient:
 
     async def fetch_user_by_telegram(self, telegram_id: int) -> Optional[RemnawaveUser]:
         return await self._get_user_by_telegram(telegram_id)
+
+    def _extract_device_candidates(self, payload: Any, parent_key: str = "") -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        parent_lower = parent_key.lower()
+
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    result.extend(self._extract_device_candidates(item, parent_key))
+                elif isinstance(item, str) and "device" in parent_lower:
+                    result.append({"deviceId": item, "name": item})
+            return result
+
+        if not isinstance(payload, dict):
+            return result
+
+        keys_lower = {str(key).lower() for key in payload.keys()}
+        id_keys = {
+            "deviceid",
+            "device_id",
+            "sourcedeviceid",
+            "source_device_id",
+            "clientid",
+            "client_id",
+        }
+        meta_keys = {
+            "lastseen",
+            "last_seen",
+            "lastseenat",
+            "last_seen_at",
+            "ip",
+            "ipaddress",
+            "address",
+            "remoteaddress",
+            "useragent",
+            "os",
+            "platform",
+            "model",
+        }
+        if (id_keys & keys_lower) or ("device" in parent_lower and (meta_keys & keys_lower)):
+            result.append(payload)
+
+        device_list_keys = {"clients", "clientstats", "sessions", "connections"}
+        generic_list_keys = {"items", "list", "rows"}
+        for key, value in payload.items():
+            key_lower = str(key).lower()
+            if isinstance(value, list):
+                if "device" in key_lower or key_lower in device_list_keys or (
+                    key_lower in generic_list_keys and "device" in parent_lower
+                ):
+                    for item in value:
+                        if isinstance(item, dict):
+                            result.append(item)
+                        elif isinstance(item, str):
+                            result.append({"deviceId": item, "name": item})
+                else:
+                    result.extend(self._extract_device_candidates(value, key_lower))
+            elif isinstance(value, dict):
+                result.extend(self._extract_device_candidates(value, key_lower))
+        return result
+
+    def _normalize_device(self, raw_device: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        device_id = str(
+            raw_device.get("deviceId")
+            or raw_device.get("device_id")
+            or raw_device.get("sourceDeviceId")
+            or raw_device.get("source_device_id")
+            or raw_device.get("clientId")
+            or raw_device.get("client_id")
+            or raw_device.get("id")
+            or raw_device.get("uuid")
+            or ""
+        ).strip()
+        if not device_id:
+            return None
+
+        name = str(
+            raw_device.get("deviceName")
+            or raw_device.get("device_name")
+            or raw_device.get("name")
+            or raw_device.get("title")
+            or raw_device.get("remark")
+            or raw_device.get("userAgent")
+            or raw_device.get("user_agent")
+            or ""
+        ).strip()
+        if not name:
+            model = str(raw_device.get("model") or "").strip()
+            platform = str(raw_device.get("platform") or raw_device.get("os") or "").strip()
+            if model and platform:
+                name = f"{platform} {model}"
+            elif model:
+                name = model
+            elif platform:
+                name = platform
+            else:
+                name = device_id
+
+        ip_value = str(
+            raw_device.get("ip")
+            or raw_device.get("ipAddress")
+            or raw_device.get("ip_address")
+            or raw_device.get("remoteAddress")
+            or raw_device.get("remote_address")
+            or raw_device.get("address")
+            or ""
+        ).strip()
+
+        last_seen_value = (
+            raw_device.get("lastSeenAt")
+            or raw_device.get("last_seen_at")
+            or raw_device.get("lastSeen")
+            or raw_device.get("last_seen")
+            or raw_device.get("updatedAt")
+            or raw_device.get("updated_at")
+        )
+        last_seen = str(last_seen_value).strip() if last_seen_value is not None else ""
+
+        current_raw = raw_device.get("isCurrent")
+        if current_raw is None:
+            current_raw = raw_device.get("currentDevice")
+        if current_raw is None:
+            current_raw = raw_device.get("current")
+        is_current = (
+            bool(current_raw)
+            if isinstance(current_raw, bool)
+            else str(current_raw).strip().lower() in {"1", "true", "yes", "current"}
+        )
+
+        online_raw = raw_device.get("isOnline")
+        if online_raw is None:
+            online_raw = raw_device.get("online")
+        if online_raw is None:
+            online_raw = raw_device.get("isActive")
+        if online_raw is None:
+            online_raw = raw_device.get("active")
+        is_online = (
+            bool(online_raw)
+            if isinstance(online_raw, bool)
+            else str(online_raw).strip().lower() in {"1", "true", "yes", "online", "active"}
+        )
+
+        return {
+            "id": device_id,
+            "name": name,
+            "ip": ip_value,
+            "last_seen": last_seen,
+            "is_current": is_current,
+            "is_online": is_online,
+            "raw": raw_device,
+        }
+
+    def _extract_device_usage(self, raw_user: Dict[str, Any], devices: List[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
+        limit = _pick_int(
+            raw_user,
+            [
+                "deviceLimit",
+                "device_limit",
+                "maxDevices",
+                "max_devices",
+                "activeDeviceLimit",
+                "active_device_limit",
+                "ipLimit",
+                "ip_limit",
+                "limitIp",
+            ],
+        )
+        used = _pick_int(
+            raw_user,
+            [
+                "usedDevices",
+                "used_devices",
+                "activeDevices",
+                "active_devices",
+                "devicesCount",
+                "devices_count",
+                "deviceCount",
+                "device_count",
+            ],
+        )
+
+        devices_section = raw_user.get("devices")
+        if isinstance(devices_section, dict):
+            if limit is None:
+                limit = _pick_int(
+                    devices_section,
+                    [
+                        "deviceLimit",
+                        "device_limit",
+                        "maxDevices",
+                        "max_devices",
+                        "limit",
+                    ],
+                )
+            if used is None:
+                used = _pick_int(
+                    devices_section,
+                    [
+                        "used",
+                        "count",
+                        "active",
+                        "activeCount",
+                        "active_count",
+                        "total",
+                    ],
+                )
+
+        if used is None and devices:
+            used = len(devices)
+
+        return used, limit
+
+    async def get_user_devices_by_telegram(self, telegram_id: int) -> tuple[List[Dict[str, Any]], Optional[int], Optional[int]]:
+        user = await self._get_user_by_telegram(telegram_id)
+        if not user or not isinstance(user.raw, dict):
+            return [], None, None
+
+        raw_devices = self._extract_device_candidates(user.raw)
+        devices: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_device in raw_devices:
+            normalized = self._normalize_device(raw_device)
+            if not normalized:
+                continue
+            marker = normalized["id"]
+            if marker in seen:
+                continue
+            seen.add(marker)
+            devices.append(normalized)
+
+        used, limit = self._extract_device_usage(user.raw, devices)
+        return devices, used, limit
+
+    async def unlink_user_device(self, user_uuid: str, device_id: str, telegram_id: Optional[int] = None) -> bool:
+        if not user_uuid or not device_id:
+            return False
+
+        encoded_device_id = quote(str(device_id), safe="")
+        candidates: List[tuple[str, str, Optional[Dict[str, Any]]]] = [
+            ("DELETE", f"/api/users/{user_uuid}/devices/{encoded_device_id}", None),
+            ("DELETE", f"/users/{user_uuid}/devices/{encoded_device_id}", None),
+            ("POST", f"/api/users/{user_uuid}/devices/{encoded_device_id}/disconnect", None),
+            ("POST", f"/users/{user_uuid}/devices/{encoded_device_id}/disconnect", None),
+            ("POST", f"/api/users/{user_uuid}/devices/disconnect", {"deviceId": device_id}),
+            ("POST", f"/users/{user_uuid}/devices/disconnect", {"deviceId": device_id}),
+            ("POST", "/api/users/disconnect-device", {"uuid": user_uuid, "deviceId": device_id}),
+            ("POST", "/users/disconnect-device", {"uuid": user_uuid, "deviceId": device_id}),
+            ("DELETE", f"/api/devices/{encoded_device_id}", None),
+            ("DELETE", f"/devices/{encoded_device_id}", None),
+            ("POST", f"/api/devices/{encoded_device_id}/disconnect", None),
+            ("POST", f"/devices/{encoded_device_id}/disconnect", None),
+        ]
+        if telegram_id is not None:
+            candidates.extend(
+                [
+                    ("POST", "/api/users/disconnect-device", {"telegramId": telegram_id, "deviceId": device_id}),
+                    ("POST", "/users/disconnect-device", {"telegramId": telegram_id, "deviceId": device_id}),
+                ]
+            )
+
+        headers = dict(self.default_headers)
+        if self.local:
+            headers["x-forwarded-for"] = "127.0.0.1"
+            headers["x-forwarded-proto"] = "https"
+
+        for method, path, payload in candidates:
+            url = f"{self.base_url}{path}"
+            async with self.session.request(method, url, headers=headers, json=payload) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+                if resp.status in {400, 404, 405, 409, 422}:
+                    continue
+                body = await resp.text()
+                raise RuntimeError(f"Remnawave unlink device failed: {resp.status} {body}")
+        return False
+
+    async def unlink_user_device_by_telegram(self, telegram_id: int, device_id: str) -> bool:
+        user = await self._get_user_by_telegram(telegram_id)
+        if not user:
+            return False
+        return await self.unlink_user_device(user.uuid, device_id, telegram_id=telegram_id)
 
     async def reset_user_traffic(self, user_uuid: str) -> bool:
         if not user_uuid:

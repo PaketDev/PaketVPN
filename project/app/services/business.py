@@ -324,16 +324,16 @@ class PaymentService:
 
         username_value = username or customer.username or ""
         username_text = f"@{username_value}" if username_value else "-"
-        source_text = "deeplink" if source == "deeplink" else "manual"
+        source_text = "deep-link" if source == "deeplink" else "ручной ввод"
         text = (
-            "🎟 <b>Promo activated</b>\n"
-            f"ID: <code>{customer.telegram_id}</code>\n"
-            f"Username: {html.escape(username_text)}\n"
-            f"Code: <code>{html.escape(promo.code)}</code>\n"
-            f"Bonus: <b>+{promo.days} days, +{promo.traffic_gb} GB</b>\n"
-            f"Used: <b>{promo.used}/{promo.max_uses}</b>\n"
-            f"Source: <b>{html.escape(source_text)}</b>\n"
-            f"Time (UTC): <b>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</b>"
+            "🎟 <b>Активация промокода</b>\n"
+            f"• <b>Пользователь:</b> <code>{customer.telegram_id}</code>\n"
+            f"• <b>Юзернейм:</b> {html.escape(username_text)}\n"
+            f"• <b>Код:</b> <code>{html.escape(promo.code)}</code>\n"
+            f"• <b>Бонус:</b> <b>+{promo.days} дн., +{promo.traffic_gb} ГБ</b>\n"
+            f"• <b>Использовано:</b> <b>{promo.used}/{promo.max_uses}</b>\n"
+            f"• <b>Источник:</b> <b>{html.escape(source_text)}</b>\n"
+            f"• <b>Время (UTC):</b> <code>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</code>"
         )
         for chat_id in chat_ids:
             try:
@@ -438,21 +438,24 @@ class PaymentService:
             amount_text = f"{purchase.amount} ⭐ (~{float(purchase.amount):.2f} ₽)"
         else:
             amount_text = f"{purchase.amount} {purchase.currency or 'RUB'}"
+        plan_text = self._plan_label_ru(plan, purchase.month)
+        payment_text = self._invoice_type_label_ru(purchase.invoice_type)
         expire_value = current_expire_at.strftime("%d.%m.%Y %H:%M") if current_expire_at else "-"
         paid_at_value = purchase.paid_at.strftime("%d.%m.%Y %H:%M") if purchase.paid_at else "-"
         text = (
             f"🔔 <b>{event_title}</b>\n"
-            f"Purchase ID: <code>{purchase.id}</code>\n"
-            f"ID: <code>{customer.telegram_id}</code>\n"
-            f"Username: {username}\n"
-            f"План: <b>{plan}</b>\n"
-            f"Сумма: <b>{amount_text}</b>\n"
-            f"Платеж: <b>{purchase.invoice_type or '-'}</b>\n"
-            f"Оплачен: <b>{paid_at_value}</b>\n"
-            f"Действует до: <b>{expire_value}</b>"
+            f"• <b>Покупка:</b> <code>{purchase.id}</code>\n"
+            f"• <b>Пользователь:</b> <code>{customer.telegram_id}</code>\n"
+            f"• <b>Юзернейм:</b> {html.escape(username)}\n"
+            f"• <b>Тариф:</b> <b>{html.escape(plan_text)}</b>\n"
+            f"• <b>Сумма:</b> <b>{html.escape(amount_text)}</b>\n"
+            f"• <b>Платеж:</b> <b>{html.escape(payment_text)}</b>\n"
+            f"• <b>Оплачен:</b> <b>{paid_at_value}</b>\n"
+            f"• <b>Действует до:</b> <b>{expire_value}</b>"
         )
         if is_gift:
-            text += f"\nДаритель: <code>{purchase.gift_sender_telegram_id}</code>"
+            text += f"\n• <b>Даритель:</b> <code>{purchase.gift_sender_telegram_id}</code>"
+        text += f"\n• <b>Время (UTC):</b> <code>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</code>"
         for chat_id in chat_ids:
             try:
                 await self.bot.send_message(chat_id, text, parse_mode="HTML")
@@ -781,6 +784,32 @@ class PaymentService:
             return f"Standard {months}m"
         return plan
 
+    def _plan_label_ru(self, plan: str, months: int) -> str:
+        if plan == "duo":
+            return "Duo"
+        if plan == "family":
+            return "Family"
+        if plan == "topup10":
+            return "Докупка +10 ГБ"
+        if plan == "topup20":
+            return "Докупка +20 ГБ"
+        if plan == "topup50":
+            return "Докупка +50 ГБ"
+        if months > 0:
+            return f"{months} мес."
+        return plan or "-"
+
+    def _invoice_type_label_ru(self, invoice_type: Optional[str]) -> str:
+        normalized = (invoice_type or "").lower()
+        mapping = {
+            "yookasa": "Банковская карта",
+            "platega": "СБП",
+            "crypto": "Криптовалюта",
+            "telegram": "Telegram Stars",
+            "tribute": "Tribute",
+        }
+        return mapping.get(normalized, invoice_type or "-")
+
     async def _send_receipt_to_moynalog(self, purchase: Purchase) -> None:
         if not self.moynalog_client:
             return
@@ -796,7 +825,11 @@ class PaymentService:
                 try:
                     await self.bot.send_message(
                         chat_id,
-                        f"⚠️ Moynalog error for purchase {purchase.id}: {err}",
+                        "⚠️ <b>Ошибка Moynalog</b>\n"
+                        f"• <b>Покупка:</b> <code>{purchase.id}</code>\n"
+                        f"• <b>Причина:</b> <code>{html.escape(str(err)[:300])}</code>\n"
+                        f"• <b>Время (UTC):</b> <code>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</code>",
+                        parse_mode="HTML",
                     )
                 except Exception as send_err:  # noqa: BLE001
                     logger.warning("failed to notify chat=%s about Moynalog issue: %s", chat_id, send_err)

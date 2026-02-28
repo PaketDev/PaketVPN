@@ -50,6 +50,8 @@ CallbackSell = "sell"
 CallbackStart = "start"
 CallbackConnect = "connect"
 CallbackConnectInstructions = "connect_instructions"
+CallbackConnectDevices = "connect_devices"
+CallbackConnectDeviceDetach = "connect_device_detach"
 CallbackSettings = "settings"
 CallbackSettingsToggleNotifications = "settings_toggle_notifications"
 CallbackSettingsToggleBroadcast = "settings_toggle_broadcast"
@@ -223,6 +225,7 @@ def setup_router(
     promo_admin_state: Dict[int, Dict[str, Any]] = {}
     panel_state: Dict[int, Dict[str, Any]] = {}
     gift_state: Dict[int, Dict[str, Any]] = {}
+    connect_device_state: Dict[int, Dict[str, str]] = {}
     pending_captcha: Dict[int, Dict[str, Any]] = {}
     pending_start_promo: Dict[int, str] = {}
 
@@ -544,6 +547,129 @@ def setup_router(
                 pass
         return f"➕ {gb} GB ({stars}⭐)"
 
+    def _utc_now_text() -> str:
+        return datetime.utcnow().strftime("%d.%m.%Y %H:%M:%S")
+
+    def _short_device_id(raw_value: str) -> str:
+        value = (raw_value or "").strip()
+        if len(value) <= 18:
+            return value
+        return f"{value[:8]}...{value[-6:]}"
+
+    def _format_device_seen(raw_value: str) -> str:
+        value = (raw_value or "").strip()
+        if not value:
+            return ""
+        candidates = [value]
+        if value.endswith("Z"):
+            candidates.append(value.replace("Z", "+00:00"))
+        for candidate in candidates:
+            try:
+                parsed = datetime.fromisoformat(candidate)
+            except ValueError:
+                continue
+            if parsed.tzinfo:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed.strftime("%d.%m.%Y %H:%M UTC")
+        return value
+
+    def _device_button_label(lang: str, index: int, device: Dict[str, Any]) -> str:
+        name = str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip()
+        if len(name) > 20:
+            name = name[:17] + "..."
+        return tm.get_text(lang, "my_devices_detach_button") % f"{index}. {name}"
+
+    def _build_connect_devices_text(
+        lang: str,
+        devices: List[Dict[str, Any]],
+        used_count: Optional[int],
+        limit_count: Optional[int],
+    ) -> str:
+        used_value = used_count if used_count is not None else len(devices)
+        if limit_count is not None:
+            remaining = max(0, int(limit_count) - int(used_value))
+            summary = tm.get_text(lang, "my_devices_summary_full") % (used_value, int(limit_count), remaining)
+        elif used_count is not None or devices:
+            summary = tm.get_text(lang, "my_devices_summary_used_only") % used_value
+        else:
+            summary = tm.get_text(lang, "my_devices_summary_unknown")
+
+        lines: List[str] = [tm.get_text(lang, "my_devices_title"), "", summary]
+        if not devices:
+            lines.extend(["", tm.get_text(lang, "my_devices_empty")])
+            return "\n".join(lines)
+
+        lines.extend(["", tm.get_text(lang, "my_devices_list_title")])
+        max_items = 10
+        for idx, device in enumerate(devices[:max_items], start=1):
+            name = html.escape(str(device.get("name") or tm.get_text(lang, "my_devices_unknown_name")).strip())
+            lines.append(f"{idx}. <b>{name}</b>")
+
+            device_id = _short_device_id(str(device.get("id") or "").strip())
+            if device_id:
+                lines.append(tm.get_text(lang, "my_devices_line_id") % html.escape(device_id))
+
+            ip_value = str(device.get("ip") or "").strip()
+            if ip_value:
+                lines.append(tm.get_text(lang, "my_devices_line_ip") % html.escape(ip_value))
+
+            last_seen = _format_device_seen(str(device.get("last_seen") or "").strip())
+            if last_seen:
+                lines.append(tm.get_text(lang, "my_devices_line_last_seen") % html.escape(last_seen))
+
+            if device.get("is_online"):
+                lines.append(tm.get_text(lang, "my_devices_line_online"))
+            lines.append("")
+
+        if len(devices) > max_items:
+            lines.append(tm.get_text(lang, "my_devices_more") % (len(devices) - max_items))
+
+        return "\n".join(lines).strip()
+
+    def _build_connect_devices_markup(lang: str, owner_id: int, devices: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+        rows: List[List[InlineKeyboardButton]] = []
+        device_map: Dict[str, str] = {}
+        max_items = 10
+
+        for idx, device in enumerate(devices[:max_items], start=1):
+            device_id = str(device.get("id") or "").strip()
+            if not device_id:
+                continue
+            key = str(idx)
+            device_map[key] = device_id
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=_device_button_label(lang, idx, device),
+                        callback_data=f"{CallbackConnectDeviceDetach}?k={key}",
+                    )
+                ]
+            )
+
+        if device_map:
+            connect_device_state[owner_id] = device_map
+        else:
+            connect_device_state.pop(owner_id, None)
+
+        rows.append([InlineKeyboardButton(text=tm.get_text(lang, "my_devices_refresh_button"), callback_data=CallbackConnectDevices)])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tm.get_text(lang, "back_button"),
+                    callback_data=CallbackConnect,
+                    style="primary",
+                    icon_custom_emoji_id=_button_emoji_id(lang, "back_button"),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _get_connect_devices_panel(lang: str, owner_id: int, telegram_id: int) -> Tuple[str, InlineKeyboardMarkup]:
+        devices, used_count, limit_count = await payment_service.remnawave_client.get_user_devices_by_telegram(telegram_id)
+        text = _build_connect_devices_text(lang, devices, used_count, limit_count)
+        markup = _build_connect_devices_markup(lang, owner_id, devices)
+        return text, markup
+
     def _gift_duration_keyboard(lang: str) -> InlineKeyboardMarkup:
         rows: List[List[InlineKeyboardButton]] = []
         months = (1, 3, 6, 12)
@@ -837,11 +963,11 @@ def setup_router(
             ref_text = f"id {referrer_id_raw}"
         text = (
             "🆕 <b>Первый вход в бота</b>\n"
-            f"ID: <code>{customer.telegram_id}</code>\n"
-            f"Username: {html.escape(username_text)}\n"
-            f"Реферал: {html.escape(ref_text)}\n"
-            f"Язык: <b>{html.escape(customer.language or config.default_language)}</b>\n"
-            f"Время (UTC): <b>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</b>"
+            f"• <b>Пользователь:</b> <code>{customer.telegram_id}</code>\n"
+            f"• <b>Юзернейм:</b> {html.escape(username_text)}\n"
+            f"• <b>Реферал:</b> {html.escape(ref_text)}\n"
+            f"• <b>Язык:</b> <code>{html.escape(customer.language or config.default_language)}</code>\n"
+            f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
         )
         await _send_log_message(text)
 
@@ -858,11 +984,11 @@ def setup_router(
             ref_text = f"{ref_username} (id {referrer_customer.telegram_id})"
         text = (
             "🎁 <b>Активирован пробный период</b>\n"
-            f"ID: <code>{customer.telegram_id}</code>\n"
-            f"Username: {html.escape(username_text)}\n"
-            f"До: <b>{until}</b>\n"
-            f"Реферал: {html.escape(ref_text)}\n"
-            f"Время (UTC): <b>{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}</b>"
+            f"• <b>Пользователь:</b> <code>{customer.telegram_id}</code>\n"
+            f"• <b>Юзернейм:</b> {html.escape(username_text)}\n"
+            f"• <b>Доступ до:</b> <b>{until}</b>\n"
+            f"• <b>Реферал:</b> {html.escape(ref_text)}\n"
+            f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
         )
         await _send_log_message(text)
 
@@ -1223,6 +1349,49 @@ def setup_router(
             parse_mode="HTML",
         )
         await callback.answer()
+
+    @router.callback_query(F.data == CallbackConnectDevices)
+    async def connect_devices_callback(callback: CallbackQuery) -> None:
+        customer = await customer_repo.find_by_telegram_id(callback.message.chat.id)
+        if not customer:
+            await callback.answer()
+            return
+        lang = customer.language or callback.from_user.language_code or config.default_language
+        text, markup = await _get_connect_devices_panel(lang, callback.from_user.id, customer.telegram_id)
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith(f"{CallbackConnectDeviceDetach}?"))
+    async def connect_device_detach_callback(callback: CallbackQuery) -> None:
+        customer = await customer_repo.find_by_telegram_id(callback.message.chat.id)
+        if not customer:
+            await callback.answer()
+            return
+
+        lang = customer.language or callback.from_user.language_code or config.default_language
+        params = parse_callback_data(callback.data or "")
+        key = (params.get("k") or "").strip()
+        device_id = connect_device_state.get(callback.from_user.id, {}).get(key)
+        if not device_id:
+            await callback.answer(tm.get_text(lang, "my_devices_state_expired"), show_alert=True)
+        else:
+            try:
+                removed = await payment_service.remnawave_client.unlink_user_device_by_telegram(customer.telegram_id, device_id)
+            except Exception as err:  # noqa: BLE001
+                removed = False
+                logger.warning(
+                    "failed to unlink device telegram_id=%s device_id=%s: %s",
+                    customer.telegram_id,
+                    device_id,
+                    err,
+                )
+            if removed:
+                await callback.answer(tm.get_text(lang, "my_devices_detach_success"), show_alert=True)
+            else:
+                await callback.answer(tm.get_text(lang, "my_devices_detach_failed"), show_alert=True)
+
+        text, markup = await _get_connect_devices_panel(lang, callback.from_user.id, customer.telegram_id)
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
 
     @router.message(Command("promo"))
     async def promo_admin_menu(message: Message) -> None:
@@ -1663,10 +1832,11 @@ def setup_router(
         )
         await _send_log_message(
             "📢 <b>Рассылка завершена</b>\n"
-            f"Админ: <code>{callback.from_user.id}</code>\n"
-            f"Аудитория: <b>{html.escape(audience)}</b>\n"
-            f"Успешно: <b>{success}</b>\n"
-            f"Ошибок: <b>{failed}</b>"
+            f"• <b>Админ:</b> <code>{callback.from_user.id}</code>\n"
+            f"• <b>Аудитория:</b> <b>{html.escape(_broadcast_audience_title(lang, audience))}</b>\n"
+            f"• <b>Успешно:</b> <b>{success}</b>\n"
+            f"• <b>Ошибок:</b> <b>{failed}</b>\n"
+            f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
         )
         await callback.answer()
 
@@ -1861,21 +2031,31 @@ def setup_router(
                 )
             ]
         )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=tm.get_text(lang, "my_devices_button"),
+                    callback_data=CallbackConnectDevices,
+                )
+            ]
+        )
         if config.telegram_stars_enabled:
-            topup_row: List[InlineKeyboardButton] = []
-            topup_row.append(
-                InlineKeyboardButton(
-                    text=_topup_text(lang, 10, config.topup_10_price_stars),
-                    callback_data=f"payment?plan=topup10&invoiceType=telegram&amount={config.topup_10_price_stars}&month=0",
-                )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=_topup_text(lang, 10, config.topup_10_price_stars),
+                        callback_data=f"payment?plan=topup10&invoiceType=telegram&amount={config.topup_10_price_stars}&month=0",
+                    )
+                ]
             )
-            topup_row.append(
-                InlineKeyboardButton(
-                    text=_topup_text(lang, 20, config.topup_20_price_stars),
-                    callback_data=f"payment?plan=topup20&invoiceType=telegram&amount={config.topup_20_price_stars}&month=0",
-                )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=_topup_text(lang, 20, config.topup_20_price_stars),
+                        callback_data=f"payment?plan=topup20&invoiceType=telegram&amount={config.topup_20_price_stars}&month=0",
+                    )
+                ]
             )
-            buttons.append(topup_row)
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -2271,10 +2451,11 @@ def setup_router(
             )
             await _send_log_message(
                 "🎁 <b>Админ выдал подарок</b>\n"
-                f"Админ: <code>{message.from_user.id}</code>\n"
-                f"Получатель: <code>{selected_user_id}</code>\n"
-                f"Срок: <b>{total_days} дн.</b>\n"
-                f"Тег: <code>{html.escape(selected_tag)}</code>"
+                f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                f"• <b>Получатель:</b> <code>{selected_user_id}</code>\n"
+                f"• <b>Срок:</b> <b>{total_days} дн.</b>\n"
+                f"• <b>Тег:</b> <code>{html.escape(selected_tag)}</code>\n"
+                f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
             )
             return
 
@@ -2672,8 +2853,9 @@ def setup_router(
                 await message.answer(tm.get_text(lang, "admin_user_deleted_done") % telegram_id, parse_mode="HTML")
                 await _send_log_message(
                     "🗑 <b>Админ удалил пользователя</b>\n"
-                    f"Админ: <code>{message.from_user.id}</code>\n"
-                    f"Пользователь: <code>{telegram_id}</code>"
+                    f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                    f"• <b>Пользователь:</b> <code>{telegram_id}</code>\n"
+                    f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
                 )
                 return
 
@@ -2718,10 +2900,11 @@ def setup_router(
                 )
                 await _send_log_message(
                     "🛠 <b>Админ продлил подписку</b>\n"
-                    f"Админ: <code>{message.from_user.id}</code>\n"
-                    f"Пользователь: <code>{telegram_id}</code>\n"
-                    f"Дней: <b>{days}</b>\n"
-                    f"До: <b>{updated_user.expire_at.strftime('%d.%m.%Y %H:%M')}</b>"
+                    f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                    f"• <b>Пользователь:</b> <code>{telegram_id}</code>\n"
+                    f"• <b>Добавлено дней:</b> <b>{days}</b>\n"
+                    f"• <b>Действует до:</b> <b>{updated_user.expire_at.strftime('%d.%m.%Y %H:%M')}</b>\n"
+                    f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
                 )
                 return
 
@@ -2753,8 +2936,9 @@ def setup_router(
                 )
                 await _send_log_message(
                     "♾ <b>Админ выдал бессрочную подписку</b>\n"
-                    f"Админ: <code>{message.from_user.id}</code>\n"
-                    f"Пользователь: <code>{telegram_id}</code>"
+                    f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                    f"• <b>Пользователь:</b> <code>{telegram_id}</code>\n"
+                    f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
                 )
                 return
 
@@ -2788,8 +2972,9 @@ def setup_router(
                 )
                 await _send_log_message(
                     "⛔ <b>Админ отключил подписку</b>\n"
-                    f"Админ: <code>{message.from_user.id}</code>\n"
-                    f"Пользователь: <code>{telegram_id}</code>"
+                    f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                    f"• <b>Пользователь:</b> <code>{telegram_id}</code>\n"
+                    f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
                 )
                 return
 
@@ -2853,9 +3038,10 @@ def setup_router(
                 )
                 await _send_log_message(
                     "💸 <b>Админ изменил цену</b>\n"
-                    f"Админ: <code>{message.from_user.id}</code>\n"
-                    f"Поле: <b>{html.escape(label)}</b>\n"
-                    f"Новое значение: <code>{value}</code>"
+                    f"• <b>Админ:</b> <code>{message.from_user.id}</code>\n"
+                    f"• <b>Поле:</b> <b>{html.escape(label)}</b>\n"
+                    f"• <b>Новое значение:</b> <code>{value}</code>\n"
+                    f"• <b>Время (UTC):</b> <code>{_utc_now_text()}</code>"
                 )
                 return
 
